@@ -1,0 +1,102 @@
+schema_version: 1
+component: battery_guardian
+sample_period_ms: 100
+
+# Fault classes injected by the campaign in the first implementation step.
+# This is ground truth supplied by the campaign/injector, not inferred by the Guardian.
+injection_classes:
+  - transport.delay
+  - transport.drop
+  - signal.stuck
+  - signal.spike
+  - signal.drift
+  - signal.out_of_range
+  - source.dropout
+
+# Detection classes reported by the Guardian and consumed by the Evidence Collector.
+# They describe the observed violation, not necessarily the injected root cause.
+guardian_detection_classes:
+  PHYSICAL_TEMP_ABSOLUTE_LIMIT:
+    fault_id: BatteryTempAbsoluteLimit
+  PHYSICAL_TEMP_ORDERING:
+    fault_id: BatteryTempOrderingViolation
+  PHYSICAL_TEMP_SPREAD:
+    fault_id: BatteryTempSpreadViolation
+  PHYSICAL_TEMP_HOTSPOT:
+    fault_id: BatteryTempHotspotViolation
+  PHYSICAL_TEMP_RATE:
+    fault_id: BatteryTempRateViolation
+  PHYSICAL_SOC_RANGE:
+    fault_id: BatterySoCRangeViolation
+  PHYSICAL_SOC_RATE:
+    fault_id: BatterySoCRateViolation
+  SIGNAL_STUCK:
+    fault_id: BatteryTempSignalStuck
+  STREAM_STALE:
+    fault_id: BatteryStreamStale
+
+# Event emitted by the Guardian for each detection state transition.
+# The Collector correlates this observation with campaign ground truth.
+guardian_evidence_event:
+  required:
+    - run_id
+    - detection_class
+    - fault_id
+    - state
+    - detected_at_ms
+  context:
+    - temp_min
+    - temp_avg
+    - temp_max
+    - soc
+    - signal
+    - observed
+    - limit
+
+# Ground-truth metadata supplied by the campaign/injector to the Collector.
+campaign_ground_truth:
+  required:
+    - run_id
+    - injection_id
+    - injected_class
+    - injected_at_ms
+
+# Expected relation between injected root cause and Guardian observation.
+# Several injected causes may intentionally map to the same detection class.
+mapping:
+  transport.delay:
+    expected_guardian:
+      - STREAM_STALE
+    root_cause_from_guardian: ambiguous
+
+  transport.drop:
+    expected_guardian:
+      - STREAM_STALE
+    root_cause_from_guardian: ambiguous
+
+  signal.stuck:
+    expected_guardian:
+      - SIGNAL_STUCK
+
+  signal.spike:
+    expected_guardian:
+      - PHYSICAL_TEMP_RATE
+    may_also_raise:
+      - PHYSICAL_TEMP_SPREAD
+      - PHYSICAL_TEMP_HOTSPOT
+      - PHYSICAL_TEMP_ABSOLUTE_LIMIT
+
+  signal.drift:
+    expected_guardian:
+      - PHYSICAL_TEMP_SPREAD
+      - PHYSICAL_TEMP_HOTSPOT
+    note: scenario should remain within the per-sample rate limit to isolate drift
+
+  signal.out_of_range:
+    expected_guardian:
+      - PHYSICAL_TEMP_ABSOLUTE_LIMIT
+
+  source.dropout:
+    expected_guardian:
+      - STREAM_STALE
+    root_cause_from_guardian: ambiguous

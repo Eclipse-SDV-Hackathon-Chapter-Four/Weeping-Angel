@@ -1,5 +1,7 @@
 # Doctor Whodunit
 
+See [PLAN.md](PLAN.md) for our updated plan.
+
 > Every fault leaves evidence. Solve the case.
 
 ## The Challenge
