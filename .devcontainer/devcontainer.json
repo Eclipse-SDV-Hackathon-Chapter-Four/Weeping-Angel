@@ -5,6 +5,7 @@
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
   "updateRemoteUserUID": false,
+  "runArgs": ["--userns=keep-id"],
   "containerEnv": {
     "VIRTUAL_ENV": "/home/vscode/.venv"
   },
