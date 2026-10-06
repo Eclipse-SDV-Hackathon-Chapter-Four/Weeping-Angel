@@ -1,0 +1,3 @@
+[submodule "opensovd-core"]
+	path = opensovd-core
+	url = https://github.com/eclipse-opensovd/opensovd-core.git
