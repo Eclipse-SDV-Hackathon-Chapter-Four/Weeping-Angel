@@ -17,3 +17,13 @@ RUN arch="$(dpkg --print-architecture)" \
     && chmod +x /usr/local/bin/toxiproxy-server /usr/local/bin/toxiproxy-cli
 
 ENV LIBCLANG_PATH=/usr/lib/llvm-14/lib
+
+ARG BAZEL_VERSION=8.3.0
+RUN case "$(dpkg --print-architecture)" in \
+        amd64) bazel_arch=x86_64 ;; \
+        arm64) bazel_arch=arm64 ;; \
+        *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /usr/local/bin/bazel \
+        "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-${bazel_arch}" \
+    && chmod +x /usr/local/bin/bazel
