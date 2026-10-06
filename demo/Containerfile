@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1.7
+ARG RUST_IMAGE=docker.io/library/rust:1-bookworm
+FROM ${RUST_IMAGE} AS build
+ARG BIN_NAME
+WORKDIR /workspace
+
+COPY Cargo.toml ./
+COPY services/Cargo.toml services/Cargo.toml
+COPY services/build.rs   services/build.rs
+COPY services/proto      services/proto
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p services/src/bin \
+    && printf "pub fn placeholder() {}\n" > services/src/lib.rs \
+    && printf "fn main() {}\n" > services/src/bin/guardian.rs \
+    && printf "fn main() {}\n" > services/src/bin/temp_publisher.rs \
+    && printf "fn main() {}\n" > services/src/bin/vss_bridge.rs
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    cargo build --target-dir /workspace/target --bin ${BIN_NAME}
+
+COPY services/src services/src
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    mkdir -p /workspace/target \
+    && printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > /workspace/target/CACHEDIR.TAG \
+    && cargo clean -p dr-whodunit-services --target-dir /workspace/target \
+    && cargo build --target-dir /workspace/target --bin ${BIN_NAME} \
+    && mkdir -p /workspace/out \
+    && cp /workspace/target/debug/${BIN_NAME} /workspace/out/service
+
+FROM docker.io/library/debian:bookworm-slim
+ARG BIN_NAME
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /workspace/out/service /app/service
+RUN chmod +x /app/service
+
+ENV RUST_LOG=info
+ENTRYPOINT ["/app/service"]

@@ -1,0 +1,443 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Contributors to the Eclipse Foundation
+# SPDX-License-Identifier: Apache-2.0
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  schedule:
+    - cron: '0 2 * * *' # 02:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_DENY_VERSION: 0.18.9
+  CARGO_LLVM_COV_VERSION: 0.6.21
+  GIT_CLIFF_VERSION: 2.11.0
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      release: ${{ steps.check.outputs.release }}
+      channel: ${{ steps.check.outputs.channel }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v')
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          should_run=true
+          release=none
+          if [[ "$EVENT" == "schedule" ]]; then
+            if [[ "$(git rev-parse nightly 2>/dev/null || true)" == "$SHA" ]]; then
+              echo "No changes since last nightly, skipping"
+              should_run=false
+            else
+              release=nightly
+            fi
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+            if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+              exit 1
+            fi
+            release=$GITHUB_REF_NAME
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            release=latest
+          fi
+
+          # The channel follows from the release type: only a version tag is stable.
+          case "$release" in
+            v*)      channel=stable ;;
+            nightly) channel=nightly ;;
+            *)       channel=dev ;;
+          esac
+
+          {
+            echo "should_run=$should_run"
+            echo "release=$release"
+            echo "channel=$channel"
+            echo "sha=${SHA::7}"
+          } >> "$GITHUB_OUTPUT"
+
+  git-lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      OPENSOVD_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      OPENSOVD_COMMIT_SHA: ${{ needs.prepare.outputs.sha }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, profile: release-small, tests: [unittest, pytest]}
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, profile: release-small, tests: [unittest]}
+          - {os: windows-2025-vs2026, target: x86_64-pc-windows-msvc, profile: release-small, tests: [unittest]}
+          - {os: macos-15, target: aarch64-apple-darwin, profile: release-small, tests: [unittest]}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache-shared-key: ci
+
+      - run: cargo build --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+
+      - if: contains(matrix.tests, 'unittest')
+        run: cargo test --locked --all-features
+
+      - uses: astral-sh/setup-uv@v7
+      - if: contains(matrix.tests, 'pytest')
+        name: opensovd-e2e plugin self-tests
+        run: uv run --locked pytest opensovd-e2e/tests
+
+      - if: contains(matrix.tests, 'pytest')
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - if: contains(matrix.tests, 'pytest')
+        run: npm install -g @usebruno/cli
+
+      - if: contains(matrix.tests, 'pytest')
+        run: |
+          uv run --locked pytest tests/ \
+            --opensovd-target=${{ matrix.target }} \
+            --opensovd-profile=${{ matrix.profile }} \
+            --html=pytest-report.html \
+            --self-contained-html \
+            --metadata "Branch" "${{ github.ref_name }}" \
+            --metadata "Repository" "${{ github.repository }}" \
+            --metadata "Run ID" "${{ github.run_id }}" \
+            --metadata "Commit" "${{ github.sha }}" \
+            --metadata "Coverage_URL" "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/coverage/"
+
+      - if: contains(matrix.tests, 'pytest')
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-report
+          path: pytest-report.html
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opensovd-gateway-${{ matrix.target }}
+          path: target/${{ matrix.target }}/${{ matrix.profile }}/opensovd-gateway${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opensovd-mcp-${{ matrix.target }}
+          path: target/${{ matrix.target }}/${{ matrix.profile }}/opensovd-mcp${{ runner.os == 'Windows' && '.exe' || '' }}
+
+  licenses:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2.85.4
+        with:
+          tool: cargo-deny@${{ env.CARGO_DENY_VERSION }}
+      - run: cargo deny check licenses sources
+
+  advisories:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2.85.4
+        with:
+          tool: cargo-deny@${{ env.CARGO_DENY_VERSION }}
+      - run: cargo deny check advisories
+
+  lint:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ci
+      # Required for gitleaks hook
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache: false
+      - uses: astral-sh/setup-uv@v7
+      # Install Python dependencies and tools (prek, ruff, ty)
+      - run: uv sync --locked --group tools
+      # Cache prek hooks
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/prek
+          key: prek-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml', 'pyproject.toml') }}
+          restore-keys: |
+            prek-${{ runner.os }}-
+
+      - run: uv run --locked prek run --all-files --show-diff-on-failure
+
+      - name: Validate commit subjects (Conventional Commits)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for sha in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
+            git log -1 --format=%B "$sha" > /tmp/commit-msg
+            if ! uv run --locked prek run --hook-stage commit-msg \
+                --commit-msg-filename /tmp/commit-msg conventional-pre-commit; then
+              echo "::error::Non-conventional commit subject: $(git log -1 --format='%h %s' "$sha")"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+  coverage:
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    # Runs the CLI version tests too, so it needs the same stamping as build:
+    # on a tag push git describe would otherwise report the tag, not a sha.
+    env:
+      OPENSOVD_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      OPENSOVD_COMMIT_SHA: ${{ needs.prepare.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ci
+      - uses: taiki-e/install-action@v2.85.4
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm install -g @usebruno/cli
+
+      # --opensovd-coverage sets up cargo-llvm-cov instrumentation and writes the
+      # merged report (coverage.json + HTML + Cobertura). test_rust.py runs the
+      # Rust unit/integration/doc tests (--all-features) and the e2e tests spawn
+      # the gateway, which inherits LLVM_PROFILE_FILE, so all of it is one report.
+      - name: Collect coverage (Rust + e2e)
+        run: uv run pytest tests/ --opensovd-coverage
+
+      - id: cov
+        run: |
+          PERCENT=$(jq -r '.data[0].totals.lines.percent | floor' coverage.json)
+          COLOR=$([[ $PERCENT -ge 80 ]] && echo 28A745 || ([[ $PERCENT -ge 60 ]] && echo B08800 || echo CB2431))
+          curl -s "https://img.shields.io/badge/coverage-${PERCENT}%25-${COLOR}" -o target/llvm-cov/html/badge.svg
+          bash scripts/coverage-report.sh coverage.json > coverage-comment.md
+          bash scripts/coverage-report.sh --detail coverage.json >> "$GITHUB_STEP_SUMMARY"
+
+      # Post or update a sticky PR comment, identified by the marker on line 1
+      # of the rendered body. Restricted to same-repo PRs since the token is
+      # read-only for forks.
+      - name: Comment coverage on PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          jq -Rs '{body: .}' coverage-comment.md > comment.json
+          marker='<!-- coverage-report -->'
+          id=$(gh api --paginate "repos/${REPO}/issues/${PR}/comments" \
+            -q ".[] | select(.body | startswith(\"${marker}\")) | .id" | head -n1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/${REPO}/issues/comments/${id}" --input comment.json >/dev/null
+          else
+            gh api --method POST "repos/${REPO}/issues/${PR}/comments" --input comment.json >/dev/null
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: target/llvm-cov/html
+
+  pages:
+    needs: [prepare, build, coverage]
+    if: needs.prepare.outputs.should_run == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: pytest-report
+          path: site
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: coverage-report
+          path: site/coverage
+        continue-on-error: true
+
+      - run: |
+          if [ -f site/pytest-report.html ]; then
+            mv site/pytest-report.html site/index.html
+          fi
+
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - uses: actions/deploy-pages@v5
+
+  docker:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.release != 'none'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    env:
+      DOCKER_BUILD_SUMMARY: false
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - {binary: opensovd-gateway, dockerfile: docker/Dockerfile.gateway, smoke: 'uv run --locked pytest tests/opensovd-gateway/cli/test_version.py --opensovd-run="docker run --rm opensovd-gateway:test"'}
+          - {binary: opensovd-mcp, dockerfile: docker/Dockerfile.mcp, smoke: 'uv run --locked pytest tests/opensovd-mcp/cli/test_version.py --opensovd-run="docker run --rm opensovd-mcp:test"'}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: ${{ matrix.image.binary }}-*
+      - uses: astral-sh/setup-uv@v7
+      - uses: ./.github/actions/docker-publish
+        with:
+          binary: ${{ matrix.image.binary }}
+          dockerfile: ${{ matrix.image.dockerfile }}
+          release-tag: ${{ needs.prepare.outputs.release }}
+          smoke-test-cmd: ${{ matrix.image.smoke }}
+
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.release != 'none'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: taiki-e/install-action@v2.85.4
+        with:
+          tool: git-cliff@${{ env.GIT_CLIFF_VERSION }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - run: |
+          VERSION="${{ needs.prepare.outputs.release }}"
+          if [[ "${{ needs.prepare.outputs.channel }}" != "stable" ]]; then
+            git cliff --unreleased -o CHANGELOG.md
+          else
+            git cliff --current -o CHANGELOG.md
+          fi
+          mkdir -p artifacts/release
+          for binary in opensovd-gateway opensovd-mcp; do
+            for dir in artifacts/"${binary}-"*; do
+              [ -d "$dir" ] || continue
+              target=$(basename "$dir" | sed "s/${binary}-//")
+              if [[ "$target" == *windows* ]]; then
+                zip "artifacts/release/${binary}-${VERSION}-${target}.zip" "$dir/${binary}.exe"
+              else
+                chmod +x "$dir/${binary}"
+                tar -czf "artifacts/release/${binary}-${VERSION}-${target}.tar.gz" -C "$dir" "${binary}"
+              fi
+            done
+          done
+          cd artifacts/release
+          for file in *.tar.gz *.zip; do
+            sha512sum "$file" > "$file.sha512"
+          done
+
+      - uses: actions/attest-build-provenance@v4
+        if: github.repository_owner == 'eclipse-opensovd'
+        with:
+          subject-path: 'artifacts/release/*'
+
+      - name: Delete existing prerelease
+        if: needs.prepare.outputs.channel != 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete "${{ needs.prepare.outputs.release }}" --yes --cleanup-tag || true
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.prepare.outputs.release }}" \
+            --title "${{ needs.prepare.outputs.release }}" \
+            --notes-file CHANGELOG.md \
+            ${{ needs.prepare.outputs.channel != 'stable' && '--prerelease' || '' }} \
+            artifacts/release/*
+
+  gate:
+    needs: [prepare, git-lint, build, licenses, advisories, lint, coverage, pages, docker, release]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "One or more jobs failed"
+            exit 1
+          fi
+          echo "All checks passed (results: ${{ join(needs.*.result, ', ') }})"

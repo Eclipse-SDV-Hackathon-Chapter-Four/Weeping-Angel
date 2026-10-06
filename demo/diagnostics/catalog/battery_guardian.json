@@ -1,0 +1,86 @@
+{
+    "id": "battery_guardian",
+    "version": 1,
+    "faults": [
+        {
+            "id": {
+                "Text": "BatteryOverTempWarning"
+            },
+            "name": "BatteryOverTemperatureWarning",
+            "summary": "Max cell temperature crossed the WARNING threshold (>=45 C).",
+            "category": "Hardware",
+            "severity": "Warn",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryOverTempCritical"
+            },
+            "name": "BatteryOverTemperatureCritical",
+            "summary": "Max cell temperature crossed the CRITICAL threshold (>=55 C).",
+            "category": "Hardware",
+            "severity": "Fatal",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempSignalStale"
+            },
+            "name": "BatteryTempSignalStale",
+            "summary": "No fresh battery temperature sample received within the freshness deadline (delayed/dropped signal).",
+            "category": "Communication",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempSignalStuck"
+            },
+            "name": "BatteryTempSignalStuck",
+            "summary": "Battery temperature value has not changed across consecutive samples (stuck signal).",
+            "category": "Communication",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempImplausible"
+            },
+            "name": "BatteryTempImplausible",
+            "summary": "Battery temperature is out of plausible range or changed implausibly fast (spike/out-of-range).",
+            "category": "Configuration",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        }
+    ]
+}

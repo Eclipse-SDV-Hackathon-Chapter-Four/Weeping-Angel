@@ -1,0 +1,10 @@
+[workspace]
+members = ["services"]
+exclude = ["fault-lib", "opensovd-core"]
+resolver = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

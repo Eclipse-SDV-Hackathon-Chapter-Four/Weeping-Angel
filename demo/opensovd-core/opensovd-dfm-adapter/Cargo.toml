@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Contributors to the Eclipse Foundation
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "opensovd-dfm-adapter"
+version.workspace = true
+description = "DFM fault-lib adapter for OpenSOVD Core"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+dfm_lib = { git = "https://github.com/bburda42dot/fault-lib.git", rev = "2b638d84a38568a70d5acab4b46cbe17a84e8e7c" }
+opensovd-core = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true
