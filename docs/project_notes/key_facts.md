@@ -1,0 +1,46 @@
+# Key Facts
+
+Non-sensitive project reference data. Verified against the checkout
+2026-10-06 (see also `demo/README.md`, `demo/docs/README.md`, `demo/tutorial.md`).
+The `demo/` tree is a reference implementation, not authoritative (ADR-003):
+the facts below describe the current checkout, not requirements.
+Never store credentials here — this file is committed to git.
+
+## Repository
+
+- Challenge spec: root `README.md` (its Definition of Done = acceptance list)
+- Demo app: `demo/` — self-documenting via `demo/README.md`, `demo/docs/README.md`, `demo/tutorial.md`
+- Idea input (no authority over ADRs, see `decisions.md` ADR-002): `PLAN.md`
+- Build environment: root Nix flake (`nix develop`); build through the devshell, not the user nix profile
+- One-command evidence run: `demo/scripts/run_demo.sh` (needs Toxiproxy binaries in `demo/.tools/`, not committed)
+
+## uProtocol Topics (over Zenoh; `up-rust` + `up-transport-zenoh`)
+
+- `battery-vss/9001/1/9001` — BatteryTempEvent JSON (source → Guardian)
+- `battery-vss/9001/1/9003` — HighTempAlert JSON
+- `guardian-vss/9000/1/9002` — GuardianSnapshot (defined in `demo/services/src/lib.rs`, not yet published)
+
+## Guardian Detection Constants (`demo/services/src/bin/guardian.rs`)
+
+- WARNING ≥ 45 °C, CRITICAL ≥ 55 °C (separate HighTempAlert event ≥ 50 °C)
+- Plausible range −40…125 °C; max step between consecutive samples 20 °C
+- Stuck: ≥ 5 consecutive identical samples; stale: no sample for 2000 ms (watchdog polls every 500 ms)
+- States: Clear/Monitoring/Warning/Critical — `Mitigating` defined in the enum but never entered; Guardian state not published over uProtocol
+
+## CAN Assets (`demo/can/`)
+
+- Frame 0x100 (256) `BatteryTemperature`, 8 bytes, 100 ms cycle: CellTempAvg (bits 0–15), CellTempMax (16–31), CellTempMin (32–47), StateOfCharge (48–63); scale 0.5, offset −40 (SoC offset 0)
+- `battery_temp.asc` = Vector ASC replay input for kuksa-can-provider `--dumpfile`
+- `vss_dbc.json` maps signals to `Vehicle.Powertrain.TractionBattery.*` (interval 100 ms)
+
+## Ports (demo)
+
+- 7447 Zenoh (uProtocol bus) · 7448 Toxiproxy(zenoh) · 7690 OpenSOVD gateway · 8080 Guardian HTTP (`/health`, `/state`) · 8474 Toxiproxy API · 55555 kuksa-databroker
+
+## Fault Catalog (`demo/diagnostics/catalog/battery_guardian.json`)
+
+- `BatteryOverTempWarning`, `BatteryOverTempCritical`, `BatteryTempSignalStale`, `BatteryTempSignalStuck`, `BatteryTempImplausible`
+
+## Known Upstream Blocker
+
+- Vendored `demo/opensovd-core` references nonexistent crates `opensovd-cli/lib` + `opensovd-cli/build` → `cargo build -p opensovd-gateway` aborts until fixed upstream; other binaries build cleanly through the devshell
