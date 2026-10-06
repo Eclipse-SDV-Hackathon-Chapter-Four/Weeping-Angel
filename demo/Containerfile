@@ -8,15 +8,21 @@ COPY Cargo.toml ./
 COPY services/Cargo.toml services/Cargo.toml
 COPY services/build.rs   services/build.rs
 COPY services/proto      services/proto
+# Path-Abhaengigkeiten von services (fault_lib, common) — ohne dieses
+# Verzeichnis schlaegt die Dependency-Aufloesung fehl:
+#   error: no matching package named `common` found
+#   location searched: /workspace/fault-lib/src/common
+COPY fault-lib ./fault-lib
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
+    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev libclang-dev clang \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p services/src/bin \
     && printf "pub fn placeholder() {}\n" > services/src/lib.rs \
     && printf "fn main() {}\n" > services/src/bin/guardian.rs \
     && printf "fn main() {}\n" > services/src/bin/temp_publisher.rs \
-    && printf "fn main() {}\n" > services/src/bin/vss_bridge.rs
+    && printf "fn main() {}\n" > services/src/bin/vss_bridge.rs \
+    && printf "fn main() {}\n" > services/src/bin/fault_injector.rs
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \

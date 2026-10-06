@@ -1,0 +1,10 @@
+# Nicht fuer den Image-Build benoetigt (verkleinert den Build-Context).
+# Benoetigt werden nur: Cargo.toml, services/, fault-lib/ (ohne target/).
+
+# Build-Artefakte
+**/target/
+
+# Nicht von der Containerfile genutzt
+opensovd-core/
+reports/
+docs/

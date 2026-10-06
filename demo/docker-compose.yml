@@ -17,7 +17,7 @@ services:
   # All uProtocol publishers/subscribers connect here via ZENOH_CONNECT.
   # ===========================================================================
   zenohd:
-    image: eclipse/zenoh:latest
+    image: docker.io/eclipse/zenoh:latest
     container_name: zenohd
     command: ["-l", "tcp/0.0.0.0:7447"]
     ports:
