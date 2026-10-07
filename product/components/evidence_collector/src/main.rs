@@ -27,6 +27,8 @@
 //!   evidence_collector <prefix> [--fault-topic URI] [--battery-topic URI]
 //!       [--idle-timeout SECS] [--expectations FILE] [--report FILE]
 //!
+//! The JSON report goes to `reports/<case name>.json` (relative to the current
+//! directory) unless `--report` names another file.
 //! `ZENOH_CONNECT` selects the Zenoh router.
 //! Exit code: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 usage/input error.
 
@@ -424,7 +426,7 @@ async fn run() -> Result<Verdict> {
     }
     let failures: Vec<_> = report.fault_events.iter().filter(|f| f.event.stage == Stage::Failed).collect();
     println!("  {} failure event(s) in total", failures.len());
-    for f in failures.iter().take(5) {
+    for f in &failures {
         let t = f.t_ms.map_or("before stream".into(), |t| format!("{t} ms"));
         println!("    {t}: {} / {} ({})", f.event.detection_class, f.event.level, f.event.fault_id);
     }
@@ -432,10 +434,21 @@ async fn run() -> Result<Verdict> {
         println!("  note: {note}");
     }
 
-    if let Some(path) = &args.report {
-        fs::write(path, serde_json::to_string_pretty(&report)?)
-            .with_context(|| format!("writing {path}"))?;
+    let path = match &args.report {
+        Some(path) => std::path::PathBuf::from(path),
+        None => {
+            let case = std::path::Path::new(&args.prefix)
+                .file_name()
+                .map_or_else(|| "report".into(), |n| n.to_string_lossy().into_owned());
+            std::path::Path::new("reports").join(format!("{case}.json"))
+        }
+    };
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
+    fs::write(&path, serde_json::to_string_pretty(&report)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    println!("  report: {}", path.display());
     Ok(report.verdict)
 }
 

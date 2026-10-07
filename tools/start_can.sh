@@ -63,6 +63,13 @@ while IFS= read -r line <&"$feeder_out"; do
   fi
 done
 
+# "Replayed" only means all frames were put on the provider's internal bus;
+# decoding and sending to the Data Broker lag behind. Let the last frames
+# through before stopping it.
+if $replayed; then
+  sleep 5
+fi
+
 if $replayed; then
   echo "start_can: replay of $ASC complete"
 else
