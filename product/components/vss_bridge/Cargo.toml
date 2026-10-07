@@ -1,0 +1,23 @@
+[package]
+name = "vss_publisher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio              = { version = "1", features = ["full"] }
+tokio-stream       = "0.1"
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+up-rust            = "0.9"
+up-transport-zenoh = "0.9"
+zenoh              = { version = "1", features = ["unstable"] }
+anyhow             = "1"
+async-trait        = "0.1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tonic              = { version = "0.11", features = ["transport"] }
+prost              = "0.12"
+prost-types        = "0.12"
+
+[build-dependencies]
+tonic-build = "0.11"
