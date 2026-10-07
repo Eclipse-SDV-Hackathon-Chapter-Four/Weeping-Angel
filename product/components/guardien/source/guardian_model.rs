@@ -3,12 +3,18 @@ use std::time::Instant;
 
 use crate::guardian_config::{GuardianConfig, ThermalLimitConfig};
 
+/// One battery observation.
+///
+/// `timestamp_ms` is the source/generation time on the relative time base
+/// (ADR-013) and drives the dynamic checks and the sequence check (Δτ).
+/// `received_at` is the local receive instant and drives freshness only.
 #[derive(Debug, Clone)]
 pub struct BatterySample {
     pub temp_min: f32,
     pub temp_avg: f32,
     pub temp_max: f32,
     pub soc: f32,
+    pub timestamp_ms: u64,
     pub received_at: Instant,
 }
 
@@ -18,6 +24,7 @@ impl BatterySample {
         temp_avg: f32,
         temp_max: f32,
         soc: f32,
+        timestamp_ms: u64,
         received_at: Instant,
     ) -> Self {
         Self {
@@ -25,6 +32,7 @@ impl BatterySample {
             temp_avg,
             temp_max,
             soc,
+            timestamp_ms,
             received_at,
         }
     }
@@ -33,6 +41,7 @@ impl BatterySample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DetectionClass {
     StreamStale,
+    StreamGenerationGap,
     ThermalLimit,
     PhysicalTempAbsoluteLimit,
     PhysicalTempOrdering,
@@ -48,6 +57,7 @@ impl DetectionClass {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::StreamStale => "STREAM_STALE",
+            Self::StreamGenerationGap => "STREAM_GENERATION_GAP",
             Self::ThermalLimit => "THERMAL_LIMIT",
             Self::PhysicalTempAbsoluteLimit => "PHYSICAL_TEMP_ABSOLUTE_LIMIT",
             Self::PhysicalTempOrdering => "PHYSICAL_TEMP_ORDERING",
@@ -106,6 +116,10 @@ pub struct Detection {
     pub limit: Option<f32>,
     pub residual: Option<f32>,
     pub utilization: Option<f32>,
+    /// Source/generation interval Δτ used by a temporal check.
+    pub interval_ms: Option<u64>,
+    /// Source timestamp of the sample whose evaluation caused the transition.
+    pub sample_timestamp_ms: Option<u64>,
     pub detected_at: Instant,
     pub active: bool,
 }
@@ -130,6 +144,8 @@ impl Detection {
             limit,
             residual,
             utilization,
+            interval_ms: None,
+            sample_timestamp_ms: None,
             detected_at,
             active: true,
         }
@@ -144,6 +160,8 @@ impl Detection {
             limit: None,
             residual: None,
             utilization: None,
+            interval_ms: None,
+            sample_timestamp_ms: None,
             detected_at,
             active: false,
         }
@@ -163,6 +181,35 @@ pub(crate) struct DetectionKey {
     pub class: DetectionClass,
     pub level: DetectionLevel,
     pub signal: Option<Signal>,
+}
+
+/// Detect missing message generations (ADR-015): a forward source/generation
+/// interval Δτ above the configured maximum means that at least one generated
+/// sample never reached the Guardian. `last_timestamp_ms` is the highest
+/// source timestamp evaluated so far; non-increasing timestamps are not a gap.
+pub fn evaluate_generation_gap(
+    timestamp_ms: u64,
+    last_timestamp_ms: Option<u64>,
+    config: &GuardianConfig,
+    now: Instant,
+) -> Option<Detection> {
+    let interval_ms = timestamp_ms.checked_sub(last_timestamp_ms?)?;
+    let limit_ms = config.max_generation_interval_ms;
+    if interval_ms <= limit_ms {
+        return None;
+    }
+    let mut detection = Detection::triggered(
+        DetectionClass::StreamGenerationGap,
+        DetectionLevel::Violation,
+        None,
+        Some(interval_ms as f32),
+        Some(limit_ms as f32),
+        Some((interval_ms - limit_ms) as f32),
+        None,
+        now,
+    );
+    detection.interval_ms = Some(interval_ms);
+    Some(detection)
 }
 
 pub fn evaluate_sample(
@@ -352,16 +399,10 @@ fn evaluate_temperature_rates(
     now: Instant,
     detections: &mut Vec<Detection>,
 ) {
-    let Some(elapsed) = current
-        .received_at
-        .checked_duration_since(previous.received_at)
-    else {
+    let Some(interval_ms) = source_interval_ms(current, previous) else {
         return;
     };
-    let elapsed_seconds = elapsed.as_secs_f32();
-    if elapsed_seconds <= 0.0 {
-        return;
-    }
+    let elapsed_seconds = interval_ms as f32 / 1_000.0;
 
     let dynamics = &config.temperature.dynamics;
     let theta = thermal_state(previous.temp_avg, config);
@@ -373,6 +414,7 @@ fn evaluate_temperature_rates(
         heating_limit += dynamics.soc_coupling.gain_c_per_pp * excitation;
     }
 
+    let first_rate_detection = detections.len();
     let temperatures = [
         (Signal::TempMin, current.temp_min, previous.temp_min),
         (Signal::TempAvg, current.temp_avg, previous.temp_avg),
@@ -394,6 +436,9 @@ fn evaluate_temperature_rates(
             now,
             detections,
         );
+    }
+    for detection in &mut detections[first_rate_detection..] {
+        detection.interval_ms = Some(interval_ms);
     }
 }
 
@@ -436,21 +481,15 @@ fn evaluate_soc_rate(
     now: Instant,
     detections: &mut Vec<Detection>,
 ) {
-    let Some(elapsed) = current
-        .received_at
-        .checked_duration_since(previous.received_at)
-    else {
+    let Some(interval_ms) = source_interval_ms(current, previous) else {
         return;
     };
-    let elapsed_seconds = elapsed.as_secs_f32();
-    if elapsed_seconds <= 0.0 {
-        return;
-    }
+    let elapsed_seconds = interval_ms as f32 / 1_000.0;
 
     let observed_rate = ((current.soc - previous.soc) / elapsed_seconds).abs();
     let residual = observed_rate - config.soc.max_rate_pp_per_s;
     if residual > 0.0 {
-        detections.push(Detection::triggered(
+        let mut detection = Detection::triggered(
             DetectionClass::PhysicalSocRate,
             DetectionLevel::Violation,
             Some(Signal::Soc),
@@ -459,8 +498,18 @@ fn evaluate_soc_rate(
             Some(residual),
             None,
             now,
-        ));
+        );
+        detection.interval_ms = Some(interval_ms);
+        detections.push(detection);
     }
+}
+
+/// Source/generation interval Δτ in ms; `None` unless strictly increasing.
+fn source_interval_ms(current: &BatterySample, previous: &BatterySample) -> Option<u64> {
+    current
+        .timestamp_ms
+        .checked_sub(previous.timestamp_ms)
+        .filter(|interval_ms| *interval_ms > 0)
 }
 
 fn thermal_state(temperature: f32, config: &GuardianConfig) -> f32 {
@@ -567,9 +616,16 @@ fn amplitude(values: impl Iterator<Item = f32>) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
     use std::time::Duration;
 
     use super::*;
+
+    /// Receive instant of a sample generated at `ms` without transport delay.
+    fn at(ms: u64) -> Instant {
+        static BASE: OnceLock<Instant> = OnceLock::new();
+        *BASE.get_or_init(Instant::now) + Duration::from_millis(ms)
+    }
 
     fn config() -> GuardianConfig {
         GuardianConfig::from_yaml_str(include_str!(
@@ -578,16 +634,16 @@ mod tests {
         .expect("test configuration")
     }
 
-    fn sample(at: Instant, temp_min: f32, temp_avg: f32, temp_max: f32, soc: f32) -> BatterySample {
-        BatterySample::new(temp_min, temp_avg, temp_max, soc, at)
+    fn sample(ms: u64, temp_min: f32, temp_avg: f32, temp_max: f32, soc: f32) -> BatterySample {
+        BatterySample::new(temp_min, temp_avg, temp_max, soc, ms, at(ms))
     }
 
-    fn nominal(at: Instant) -> BatterySample {
-        sample(at, 18.0, 20.0, 22.0, 50.0)
+    fn nominal(ms: u64) -> BatterySample {
+        sample(ms, 18.0, 20.0, 22.0, 50.0)
     }
 
-    fn thermal_sample(at: Instant, temp_max: f32) -> BatterySample {
-        sample(at, temp_max - 2.0, temp_max - 1.0, temp_max, 50.0)
+    fn thermal_sample(ms: u64, temp_max: f32) -> BatterySample {
+        sample(ms, temp_max - 2.0, temp_max - 1.0, temp_max, 50.0)
     }
 
     fn has(detections: &[Detection], class: DetectionClass) -> bool {
@@ -603,13 +659,13 @@ mod tests {
     #[test]
     fn nominal_sample_produces_no_detection() {
         let now = Instant::now();
-        assert!(evaluate_sample(&nominal(now), None, &config(), now).is_empty());
+        assert!(evaluate_sample(&nominal(0), None, &config(), now).is_empty());
     }
 
     #[test]
     fn below_warning_threshold_has_no_thermal_detection() {
         let now = Instant::now();
-        let detections = evaluate_sample(&thermal_sample(now, 59.9), None, &config(), now);
+        let detections = evaluate_sample(&thermal_sample(0, 59.9), None, &config(), now);
         assert!(!has(&detections, DetectionClass::ThermalLimit));
     }
 
@@ -617,7 +673,7 @@ mod tests {
     fn warning_band_boundaries_are_warning_only() {
         let now = Instant::now();
         for temp_max in [60.0, 69.9] {
-            let detections = evaluate_sample(&thermal_sample(now, temp_max), None, &config(), now);
+            let detections = evaluate_sample(&thermal_sample(0, temp_max), None, &config(), now);
             assert!(has_level(
                 &detections,
                 DetectionClass::ThermalLimit,
@@ -634,7 +690,7 @@ mod tests {
     #[test]
     fn critical_boundary_is_not_an_absolute_limit_violation() {
         let now = Instant::now();
-        let detections = evaluate_sample(&thermal_sample(now, 70.0), None, &config(), now);
+        let detections = evaluate_sample(&thermal_sample(0, 70.0), None, &config(), now);
         assert!(!has_level(
             &detections,
             DetectionClass::ThermalLimit,
@@ -651,7 +707,7 @@ mod tests {
     #[test]
     fn above_absolute_maximum_is_critical_and_a_physical_violation() {
         let now = Instant::now();
-        let detections = evaluate_sample(&thermal_sample(now, 70.1), None, &config(), now);
+        let detections = evaluate_sample(&thermal_sample(0, 70.1), None, &config(), now);
         assert!(!has_level(
             &detections,
             DetectionClass::ThermalLimit,
@@ -669,7 +725,7 @@ mod tests {
     fn detects_absolute_minimum_violation() {
         let now = Instant::now();
         let cfg = config();
-        let current = sample(now, cfg.temperature.absolute_min_c - 0.5, 20.0, 22.0, 50.0);
+        let current = sample(0, cfg.temperature.absolute_min_c - 0.5, 20.0, 22.0, 50.0);
         let detections = evaluate_sample(&current, None, &cfg, now);
         assert!(detections.iter().any(|detection| {
             detection.class == DetectionClass::PhysicalTempAbsoluteLimit
@@ -681,7 +737,7 @@ mod tests {
     fn detects_absolute_maximum_violation() {
         let now = Instant::now();
         let cfg = config();
-        let current = sample(now, 20.0, 22.0, cfg.temperature.absolute_max_c + 0.5, 50.0);
+        let current = sample(0, 20.0, 22.0, cfg.temperature.absolute_max_c + 0.5, 50.0);
         let detections = evaluate_sample(&current, None, &cfg, now);
         assert!(detections.iter().any(|detection| {
             detection.class == DetectionClass::PhysicalTempAbsoluteLimit
@@ -692,7 +748,7 @@ mod tests {
     #[test]
     fn detects_invalid_temperature_ordering() {
         let now = Instant::now();
-        let current = sample(now, 25.0, 20.0, 19.0, 50.0);
+        let current = sample(0, 25.0, 20.0, 19.0, 50.0);
         let detections = evaluate_sample(&current, None, &config(), now);
         assert_eq!(
             detections
@@ -717,13 +773,7 @@ mod tests {
             (1.01, Some(DetectionLevel::Violation)),
         ] {
             let observed = spread * utilization;
-            let current = sample(
-                now,
-                20.0 - observed / 2.0,
-                20.0,
-                20.0 + observed / 2.0,
-                50.0,
-            );
+            let current = sample(0, 20.0 - observed / 2.0, 20.0, 20.0 + observed / 2.0, 50.0);
             let detections = evaluate_sample(&current, None, &cfg, now);
             let detection = detections
                 .iter()
@@ -743,7 +793,7 @@ mod tests {
         let now = Instant::now();
         let cfg = config();
         let hotspot = cfg.temperature.hotspot.cold_c;
-        let current = sample(now, 15.0, 20.0, 20.0 + hotspot, 50.0);
+        let current = sample(0, 15.0, 20.0, 20.0 + hotspot, 50.0);
         let detections = evaluate_sample(&current, None, &cfg, now);
         assert!(has_level(
             &detections,
@@ -757,7 +807,7 @@ mod tests {
         let now = Instant::now();
         let cfg = config();
         let hotspot = cfg.temperature.hotspot.cold_c;
-        let current = sample(now, 15.0, 20.0, 20.1 + hotspot, 50.0);
+        let current = sample(0, 15.0, 20.0, 20.1 + hotspot, 50.0);
         let detections = evaluate_sample(&current, None, &cfg, now);
         assert!(has_level(
             &detections,
@@ -768,17 +818,10 @@ mod tests {
 
     #[test]
     fn positive_temperature_rate_at_limit_is_a_warning() {
-        let base = Instant::now();
         let cfg = config();
-        let previous = nominal(base);
+        let previous = nominal(0);
         let step = cfg.temperature.dynamics.heating_rate_c_per_s.cold;
-        let current = sample(
-            base + Duration::from_secs(1),
-            18.0 + step,
-            20.0 + step,
-            22.0 + step,
-            50.0,
-        );
+        let current = sample(1_000, 18.0 + step, 20.0 + step, 22.0 + step, 50.0);
         let detections = evaluate_sample(&current, Some(&previous), &cfg, current.received_at);
         assert!(has_level(
             &detections,
@@ -789,17 +832,10 @@ mod tests {
 
     #[test]
     fn excessive_positive_temperature_rate_is_detected() {
-        let base = Instant::now();
         let cfg = config();
-        let previous = nominal(base);
+        let previous = nominal(0);
         let step = cfg.temperature.dynamics.heating_rate_c_per_s.cold + 0.5;
-        let current = sample(
-            base + Duration::from_secs(1),
-            18.0 + step,
-            20.0 + step,
-            22.0 + step,
-            50.0,
-        );
+        let current = sample(1_000, 18.0 + step, 20.0 + step, 22.0 + step, 50.0);
         let detections = evaluate_sample(&current, Some(&previous), &cfg, current.received_at);
         assert!(has_level(
             &detections,
@@ -810,17 +846,10 @@ mod tests {
 
     #[test]
     fn cooling_rate_uses_positive_magnitude_for_warning_and_violation() {
-        let base = Instant::now();
         let cfg = config();
-        let previous = nominal(base);
+        let previous = nominal(0);
         let limit = cfg.temperature.dynamics.cooling_rate_c_per_s;
-        let at_limit = sample(
-            base + Duration::from_secs(1),
-            18.0 - limit,
-            20.0 - limit,
-            22.0 - limit,
-            50.0,
-        );
+        let at_limit = sample(1_000, 18.0 - limit, 20.0 - limit, 22.0 - limit, 50.0);
         let boundary = evaluate_sample(&at_limit, Some(&previous), &cfg, at_limit.received_at);
         assert!(has_level(
             &boundary,
@@ -835,13 +864,7 @@ mod tests {
                     && detection.limit == Some(limit)
                     && detection.utilization == Some(1.0)
             }));
-        let excessive = sample(
-            base + Duration::from_secs(1),
-            17.5 - limit,
-            19.5 - limit,
-            21.5 - limit,
-            50.0,
-        );
+        let excessive = sample(1_000, 17.5 - limit, 19.5 - limit, 21.5 - limit, 50.0);
         assert!(has_level(
             &evaluate_sample(&excessive, Some(&previous), &cfg, excessive.received_at),
             DetectionClass::PhysicalTempRate,
@@ -853,8 +876,8 @@ mod tests {
     fn detects_soc_below_and_above_range() {
         let now = Instant::now();
         let cfg = config();
-        let below = sample(now, 18.0, 20.0, 22.0, cfg.soc.min_percent - 0.5);
-        let above = sample(now, 18.0, 20.0, 22.0, cfg.soc.max_percent + 0.5);
+        let below = sample(0, 18.0, 20.0, 22.0, cfg.soc.min_percent - 0.5);
+        let above = sample(0, 18.0, 20.0, 22.0, cfg.soc.max_percent + 0.5);
         assert!(has(
             &evaluate_sample(&below, None, &cfg, now),
             DetectionClass::PhysicalSocRange
@@ -867,27 +890,14 @@ mod tests {
 
     #[test]
     fn soc_rate_boundary_is_valid_and_excess_is_detected() {
-        let base = Instant::now();
         let cfg = config();
-        let previous = nominal(base);
-        let legal = sample(
-            base + Duration::from_secs(1),
-            18.0,
-            20.0,
-            22.0,
-            50.0 + cfg.soc.max_rate_pp_per_s,
-        );
+        let previous = nominal(0);
+        let legal = sample(1_000, 18.0, 20.0, 22.0, 50.0 + cfg.soc.max_rate_pp_per_s);
         assert!(!has(
             &evaluate_sample(&legal, Some(&previous), &cfg, legal.received_at),
             DetectionClass::PhysicalSocRate
         ));
-        let excessive = sample(
-            base + Duration::from_secs(1),
-            18.0,
-            20.0,
-            22.0,
-            50.1 + cfg.soc.max_rate_pp_per_s,
-        );
+        let excessive = sample(1_000, 18.0, 20.0, 22.0, 50.1 + cfg.soc.max_rate_pp_per_s);
         assert!(has(
             &evaluate_sample(&excessive, Some(&previous), &cfg, excessive.received_at),
             DetectionClass::PhysicalSocRate
@@ -895,17 +905,10 @@ mod tests {
     }
 
     #[test]
-    fn soc_rate_uses_actual_elapsed_receive_time() {
-        let base = Instant::now();
+    fn soc_rate_uses_source_generation_interval() {
         let cfg = config();
-        let previous = nominal(base);
-        let delayed = sample(
-            base + Duration::from_secs(2),
-            18.0,
-            20.0,
-            22.0,
-            50.0 + cfg.soc.max_rate_pp_per_s,
-        );
+        let previous = nominal(0);
+        let delayed = sample(2_000, 18.0, 20.0, 22.0, 50.0 + cfg.soc.max_rate_pp_per_s);
         assert!(!has(
             &evaluate_sample(&delayed, Some(&previous), &cfg, delayed.received_at),
             DetectionClass::PhysicalSocRate
@@ -913,9 +916,60 @@ mod tests {
     }
 
     #[test]
+    fn temperature_rate_uses_source_interval_not_receive_interval() {
+        let cfg = config();
+        let previous = nominal(0);
+        // Generated 1 s apart but received in a burst 1 ms apart.
+        let step = cfg.temperature.dynamics.heating_rate_c_per_s.cold * 0.5;
+        let current = BatterySample::new(18.0 + step, 20.0 + step, 22.0 + step, 50.0, 1_000, at(1));
+        let detections = evaluate_sample(&current, Some(&previous), &cfg, current.received_at);
+        assert!(!has(&detections, DetectionClass::PhysicalTempRate));
+    }
+
+    #[test]
+    fn rate_detection_reports_source_interval() {
+        let cfg = config();
+        let previous = nominal(0);
+        let step = cfg.temperature.dynamics.heating_rate_c_per_s.cold + 0.5;
+        let current = sample(1_000, 18.0 + step, 20.0 + step, 22.0 + step, 50.0);
+        let detections = evaluate_sample(&current, Some(&previous), &cfg, current.received_at);
+        assert!(detections
+            .iter()
+            .filter(|detection| detection.class == DetectionClass::PhysicalTempRate)
+            .all(|detection| detection.interval_ms == Some(1_000)));
+    }
+
+    #[test]
+    fn generation_gap_boundary_is_valid_and_excess_is_detected() {
+        let cfg = config();
+        let limit = cfg.max_generation_interval_ms;
+        let now = at(0);
+        assert!(evaluate_generation_gap(0, None, &cfg, now).is_none());
+        assert!(evaluate_generation_gap(100, Some(0), &cfg, now).is_none());
+        assert!(evaluate_generation_gap(limit, Some(0), &cfg, now).is_none());
+
+        let detection =
+            evaluate_generation_gap(300, Some(0), &cfg, now).expect("one missing generation");
+        assert_eq!(detection.class, DetectionClass::StreamGenerationGap);
+        assert_eq!(detection.level, DetectionLevel::Violation);
+        assert_eq!(detection.interval_ms, Some(300));
+        assert_eq!(detection.observed, Some(300.0));
+        assert_eq!(detection.limit, Some(limit as f32));
+        assert_eq!(detection.residual, Some(300.0 - limit as f32));
+    }
+
+    #[test]
+    fn non_increasing_timestamps_are_not_a_generation_gap() {
+        let cfg = config();
+        let now = at(0);
+        assert!(evaluate_generation_gap(500, Some(500), &cfg, now).is_none());
+        assert!(evaluate_generation_gap(100, Some(500), &cfg, now).is_none());
+    }
+
+    #[test]
     fn first_sample_does_not_trigger_temporal_checks() {
         let now = Instant::now();
-        let current = sample(now, 18.0, 20.0, 22.0, 50.0);
+        let current = sample(0, 18.0, 20.0, 22.0, 50.0);
         let detections = evaluate_sample(&current, None, &config(), now);
         assert!(!has(&detections, DetectionClass::PhysicalTempRate));
         assert!(!has(&detections, DetectionClass::PhysicalSocRate));
@@ -923,12 +977,11 @@ mod tests {
 
     #[test]
     fn flat_temperature_without_excitation_is_not_stuck() {
-        let base = Instant::now();
         let cfg = config();
         let mut detector = StuckDetector::default();
         let mut detections = Vec::new();
         for index in 0..cfg.stuck.window_samples {
-            let current = nominal(base + Duration::from_millis(index as u64));
+            let current = nominal(index as u64 * 100);
             detections = detector.evaluate(&current, &cfg, current.received_at);
         }
         assert!(!has(&detections, DetectionClass::SignalStuck));
@@ -936,7 +989,6 @@ mod tests {
 
     #[test]
     fn flat_temperature_with_independent_excitation_is_stuck() {
-        let base = Instant::now();
         let cfg = config();
         let mut detector = StuckDetector::default();
         let mut detections = Vec::new();
@@ -944,7 +996,7 @@ mod tests {
         for index in 0..cfg.stuck.window_samples {
             let excitation = cfg.stuck.temperature_excitation_c * index as f32 / denominator;
             let current = sample(
-                base + Duration::from_millis(index as u64),
+                index as u64 * 100,
                 18.0,
                 20.0 + excitation,
                 22.0 + excitation,

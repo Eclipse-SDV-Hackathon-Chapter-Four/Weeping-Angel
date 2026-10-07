@@ -9,6 +9,7 @@ pub const CANONICAL_SIGNALS: &[&str] = &["temp_min", "temp_avg", "temp_max", "so
 
 const DETECTION_CLASSES: &[&str] = &[
     "STREAM_STALE",
+    "STREAM_GENERATION_GAP",
     "THERMAL_LIMIT",
     "PHYSICAL_TEMP_ABSOLUTE_LIMIT",
     "PHYSICAL_TEMP_ORDERING",

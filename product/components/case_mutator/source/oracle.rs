@@ -65,6 +65,7 @@ pub fn evaluate_trajectory(
             frame.values.temp_avg,
             frame.values.temp_max,
             frame.values.soc,
+            frame.source_ms,
             received_at,
         ));
         latest_source_ms = Some(frame.source_ms);
@@ -120,7 +121,7 @@ fn collect(
             residual: detection.residual,
             utilization: detection.utilization,
             predicted_at_ms,
-            source_timestamp_ms,
+            source_timestamp_ms: detection.sample_timestamp_ms.or(source_timestamp_ms),
         }
     }));
 }

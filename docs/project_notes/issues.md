@@ -37,6 +37,11 @@ is not authoritative) — they do not become open issues here.
 - **Description**: Every DFM fault change is also published as JSON `GuardianFaultEvent` on `//guardian/1001/1/8001`; aggregation moved to `guardian_faults.rs`, DFM and uProtocol channels independent (ADR-007).
 - **Notes**: Transitions plus startup baseline only. 41 Rust tests pass; Clippy (`-D warnings`) and rustfmt clean in the dev-container image. The corrected ADR-007 supersedes this mapped event as the Evidence Collector's original Guardian view; the implementation remains valid only as a separate mapped stream, not as a substitute for raw decisions.
 
+### 2026-10-07 - Detect lost battery samples from source timestamps
+- **Status**: Resolved
+- **Description**: Guardian evaluates `timestamp_ms`: new `STREAM_GENERATION_GAP / VIOLATION` → DFM `BatteryTempGenerationGap` (ADR-015), rates on Δτ, sample queue instead of overwrite, `interval_ms`/`timestamp_ms` evidence.
+- **Notes**: 59 Guardian tests, fmt and Clippy clean in `battery-guardian-dev:local`; mutator oracle and drop goals allow the gap co-detection; Evidence Collector accepts it for `transport.drop`. Open: VSS bridge wall-clock stamping causes false gaps live; duplicate/out-of-order detection not implemented.
+
 ### 2026-10-07 - Align source timestamps and Evidence Collector subscriptions
 - **Status**: In Progress
 - **Description**: Decided that every battery CAN message has a zero-based millisecond generation timestamp preserved into BatteryTempEvent; the Evidence Collector subscribes to battery events, every raw Guardian decision, and the independently produced DFM/OpenSOVD messages.
