@@ -13,7 +13,7 @@ if [ $# -ne 1 ]; then
 fi
 ASC="$1"
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FEEDER_DIR="$REPO/product/components/kuksa-can-provider"
 DBC="$REPO/product/config/battery_temp.dbc"
 MAPPING="$REPO/product/config/vss_dbc.json"
