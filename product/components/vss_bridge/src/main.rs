@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
 use vss_publisher::{
-    BatteryTempEvent, HighTempAlert, HIGH_TEMP_THRESHOLD, make_uri_provider, now_ms,
-    open_up_transport, publish_json_event, vss_battery_high_temp_uri, vss_battery_temp_uri,
+    BatteryTempEvent, make_uri_provider, now_ms,
+    open_up_transport, publish_json_event, vss_battery_temp_uri,
 };
 
 // Generated from proto/kuksa/val/v1/
@@ -108,10 +108,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        if state.temp_max == 0.0 {
-            continue;
-        }
-
         let event = BatteryTempEvent {
             temp_max: state.temp_max,
             temp_avg: state.temp_avg,
@@ -128,16 +124,6 @@ async fn main() -> anyhow::Result<()> {
         let transport = Arc::clone(&transport);
         let _ = publish_json_event(transport.clone(), vss_battery_temp_uri(), &event).await;
 
-        if event.temp_max > HIGH_TEMP_THRESHOLD {
-            let alert = HighTempAlert {
-                value: event.temp_max,
-                severity: "WARNING".to_string(),
-                unit: "degC".to_string(),
-                source: "kuksa".to_string(),
-                timestamp_ms: event.timestamp_ms,
-            };
-            let _ = publish_json_event(transport, vss_battery_high_temp_uri(), &alert).await;
-        }
     }
 
     warn!("[VssBridge] Stream ended");
