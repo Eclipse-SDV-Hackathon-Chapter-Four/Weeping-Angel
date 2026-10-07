@@ -6,12 +6,14 @@
 #
 # 1. The campaign harness generates all experiments (or the selected ones)
 #    into a fresh folder reports/campaign-<timestamp>/experiments/.
-# 2. Every experiment with a case.asc runs once via run_case.sh; experiments
-#    the harness marked unsatisfiable are skipped.
+# 2. Every experiment with a case.asc runs once via run_case.sh. Experiments
+#    the harness cannot construct (unsatisfiable.yaml, no replay) are not
+#    tests and are left out.
 # 3. Per experiment, the report and logs go to
 #    reports/campaign-<timestamp>/<campaign>--<scenario>/, and a verdict
 #    summary to reports/campaign-<timestamp>/summary.txt.
-# Exit code: 0 if every experiment passed, 1 otherwise, 3 if build or generation failed.
+# Exit code: 0 if every run experiment passed, 1 otherwise, 3 if build or
+# generation failed.
 # Env: E2E_VENV (python env for harness + replay, self-provisioned),
 #      E2E_CASE_TIMEOUT_S (per-experiment collector deadline, default 240),
 #      E2E_OBSERVER (1 = serve the live observer during each case, default 1),
@@ -79,16 +81,14 @@ for dir in "$EXPERIMENTS"/*/*/; do
   id="$campaign--$scenario"
   case_dir="$OUT/$id"
 
-  if [ ! -f "$dir/case.asc" ]; then
-    verdict=SKIPPED   # unsatisfiable: the harness kept no replay
-  else
-    echo
-    echo "################ $id"
-    mkdir -p "$case_dir"
-    bash "$TOOLS/run_case.sh" "$dir/case" "$case_dir/report.json"
-    verdict="$(verdict_name $?)"
-    cp "$ROOT"/run/*.log "$ROOT/run/collector.out" "$case_dir/" 2>/dev/null
-  fi
+  # Unsatisfiable: the harness kept no replay, so there is nothing to run.
+  [ -f "$dir/case.asc" ] || continue
+  echo
+  echo "################ $id"
+  mkdir -p "$case_dir"
+  bash "$TOOLS/run_case.sh" "$dir/case" "$case_dir/report.json"
+  verdict="$(verdict_name $?)"
+  cp "$ROOT"/run/*.log "$ROOT/run/collector.out" "$case_dir/" 2>/dev/null
 
   [ "$verdict" = PASS ] || all_passed=false
   counts[$verdict]=$(( ${counts[$verdict]:-0} + 1 ))
@@ -97,7 +97,7 @@ done
 
 {
   echo
-  for v in PASS FAIL INCONCLUSIVE ERROR SKIPPED; do
+  for v in PASS FAIL INCONCLUSIVE ERROR; do
     [ -n "${counts[$v]:-}" ] && printf '%s: %s  ' "$v" "${counts[$v]}"
   done
   echo

@@ -9,10 +9,14 @@
 //!
 //! and polls the DFM's faults in OpenSOVD (`--sovd-url`, `dfm_sovd_bridge`).
 //!
-//! Time base (ADR-013): source milliseconds of the replay. A fault event is
-//! placed at its `evidence.timestamp_ms` (source time of the causing sample),
-//! else at the latest battery `timestamp_ms`. Wall-clock (epoch) timestamps
-//! of an old VSS bridge are rebased to the first battery event.
+//! Time base: the replay timeline (ms of the `.asc`), the timeline of the
+//! oracle. For each frame the `.asc` gives its replay time and its source
+//! TimeStamp (ADR-011/013); both differ only under `transport.delay`. A
+//! battery event is placed at its frame's replay time, a fault event at the
+//! replay time of its causing frame (`evidence.timestamp_ms`) or, for a
+//! projected time without a frame (STREAM_STALE), at the last frame's replay
+//! time plus the projected age. Wall-clock (epoch) timestamps of an old VSS
+//! bridge are rebased to the first battery event.
 //!
 //! Guardian plane: the oracle's detection transitions are projected onto the
 //! fault level (see `oracle`). Every expected `Failed`/`Passed` change must
@@ -286,15 +290,16 @@ struct Timeline {
     sovd: SovdTimeline,
 }
 
-/// Places fault events and OpenSOVD activations on the source timeline.
-/// An activation is `test_failed` going true or the occurrence counter rising
-/// (one activation per counted occurrence, so short faults between two polls
-/// are not lost). A poll is placed at the last battery time plus the time
-/// since that battery event arrived, so polls during a stream gap (dropout)
-/// still advance on the timeline.
-fn timeline(messages: &[Message]) -> Timeline {
+/// Places battery and fault events and OpenSOVD activations on the replay
+/// timeline (see the module doc). An activation is `test_failed` going true
+/// or the occurrence counter rising (one activation per counted occurrence,
+/// so short faults between two polls are not lost). A poll is placed at the
+/// last battery time plus the time since that battery event arrived, so polls
+/// during a stream gap (dropout, delay) still advance on the timeline.
+fn timeline(messages: &[Message], replay: &Replay) -> Timeline {
     let mut clock = Clock::default();
     let mut now = None;
+    let mut last_source: Option<u64> = None;
     let mut last_arrival: Option<Instant> = None;
     let mut faults = Vec::new();
     let mut sovd = SovdTimeline::default();
@@ -302,13 +307,20 @@ fn timeline(messages: &[Message]) -> Timeline {
     for m in messages {
         match m {
             Message::Battery(b) => {
-                now = Some(clock.battery(b.timestamp_ms));
+                let source = clock.battery(b.timestamp_ms);
+                now = Some(replay.arrival(source).unwrap_or(source));
+                last_source = Some(source);
                 last_arrival = b.received;
             }
-            Message::Fault(f) => faults.push(TimedFault {
-                t_ms: f.evidence.timestamp_ms.and_then(|ts| clock.other(ts)).or(now),
-                event: f.clone(),
-            }),
+            Message::Fault(f) => {
+                let t_ms = match (f.evidence.timestamp_ms.and_then(|ts| clock.other(ts)), last_source, now) {
+                    // Later than any frame received: a projected time (stale).
+                    (Some(e), Some(ls), Some(n)) if e > ls => Some(n + (e - ls)),
+                    (Some(e), _, _) => Some(replay.arrival(e).unwrap_or_else(|| replay.nominal(e))),
+                    (None, _, n) => n,
+                };
+                faults.push(TimedFault { t_ms, event: f.clone() });
+            }
             Message::Sovd(None, _) => sovd.errors += 1,
             Message::Sovd(Some(snapshot), polled) => {
                 sovd.polls += 1;
@@ -362,6 +374,65 @@ fn collapse_handovers(faults: Vec<TimedFault>) -> Vec<TimedFault> {
         kept.push(Some(f));
     }
     kept.into_iter().flatten().collect()
+}
+
+/// The replay's frames: when (replay ms) each source TimeStamp is sent.
+/// Under `transport.delay` the two diverge (frames held back); otherwise they
+/// are equal. Without timestamped frames the mapping is the identity.
+#[derive(Default, Debug)]
+struct Replay {
+    /// source TimeStamp -> replay ms of that frame.
+    by_source: BTreeMap<u64, u64>,
+}
+
+/// CAN id of the battery frame (DBC `BO_ 256`); TimeStamp = bytes 0..4, LE.
+const BATTERY_CAN_ID: &str = "100";
+
+impl Replay {
+    fn parse(asc: &str) -> Self {
+        let mut by_source = BTreeMap::new();
+        for line in asc.lines() {
+            let t: Vec<&str> = line.split_whitespace().collect();
+            let Some(at_s) = t.first().and_then(|s| s.parse::<f64>().ok()) else {
+                continue;
+            };
+            // CAN FD: `t CANFD ch Rx id brs esi dlc len data..`;
+            // classic: `t ch id Rx d dlc data..`.
+            let (id, data) = match t.get(1) {
+                Some(&"CANFD") => (t.get(4), t.get(9..)),
+                _ => (t.get(2), t.get(6..)),
+            };
+            let (Some(&BATTERY_CAN_ID), Some(data)) = (id, data) else {
+                continue;
+            };
+            let bytes: Option<Vec<u8>> = data.iter().take(4).map(|b| u8::from_str_radix(b, 16).ok()).collect();
+            if let Some([b0, b1, b2, b3]) = bytes.as_deref() {
+                let source = u64::from(u32::from_le_bytes([*b0, *b1, *b2, *b3]));
+                by_source.entry(source).or_insert((at_s * 1000.0).round() as u64);
+            }
+        }
+        Replay { by_source }
+    }
+
+    /// Replay time of the frame with this source TimeStamp.
+    fn arrival(&self, source: u64) -> Option<u64> {
+        self.by_source.get(&source).copied()
+    }
+
+    /// Replay time the frame with this source TimeStamp would have had
+    /// without manipulation: the previous frame's replay time plus the source
+    /// distance. Places injection windows; identity without frames.
+    fn nominal(&self, source: u64) -> u64 {
+        match self.by_source.range(..source).next_back() {
+            Some((&prev, &at)) => at + (source - prev),
+            None => source,
+        }
+    }
+
+    /// Last source TimeStamp of the replay.
+    fn source_end_ms(&self) -> Option<u64> {
+        self.by_source.keys().next_back().copied()
+    }
 }
 
 /// Replay length: timestamp of the last `.asc` frame, in ms. Frame lines start
@@ -537,6 +608,7 @@ struct Case<'a> {
     oracle_file: &'a str,
     oracle: &'a oracle::Oracle,
     injections: &'a [Injection],
+    replay: &'a Replay,
     replay_end_ms: u64,
     sovd_url: Option<&'a str>,
 }
@@ -546,7 +618,7 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
         faults: all_faults,
         battery_end,
         sovd,
-    } = timeline(messages);
+    } = timeline(messages, case.replay);
     let all_faults: Vec<TimedFault> = all_faults.into_iter().filter(|f| !f.event.baseline).collect();
     let mut notes = Vec::new();
     let mut verdict = Verdict::Pass;
@@ -653,9 +725,11 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
     transitions.sort_by_key(|t| t.time());
 
     // Injections own the changes from their start up to the next start.
+    // Slots on the replay timeline, from where each injection's first frame
+    // would have been sent without manipulation.
     let slot = |i: usize| {
-        let start = case.injections[i].window.0;
-        (start, case.injections.get(i + 1).map(|n| n.window.0))
+        let start = case.replay.nominal(case.injections[i].window.0);
+        (start, case.injections.get(i + 1).map(|n| case.replay.nominal(n.window.0)))
     };
     for t in &mut transitions {
         let at = t.time();
@@ -898,9 +972,10 @@ async fn run() -> Result<Verdict> {
         None => Vec::new(),
     };
 
-    let replay = format!("{}.asc", args.prefix);
-    let replay_end_ms = asc_end_ms(&fs::read_to_string(&replay).with_context(|| format!("reading {replay}"))?)
-        .with_context(|| format!("parsing {replay}"))?;
+    let replay_file = format!("{}.asc", args.prefix);
+    let asc = fs::read_to_string(&replay_file).with_context(|| format!("reading {replay_file}"))?;
+    let replay_end_ms = asc_end_ms(&asc).with_context(|| format!("parsing {replay_file}"))?;
+    let replay = Replay::parse(&asc);
     eprintln!(
         "replay lasts {replay_end_ms} ms, {} injection(s), {} oracle transition(s)",
         injections.len(),
@@ -919,7 +994,8 @@ async fn run() -> Result<Verdict> {
         .map(|t| UUri::from_str(t).with_context(|| format!("invalid topic {t}")))
         .collect::<Result<Vec<_>>>()?;
     let stop = uprotocol::StopCondition {
-        end_ms: replay_end_ms,
+        // The listener sees source timestamps: wait for the last one.
+        end_ms: replay.source_end_ms().unwrap_or(replay_end_ms),
         idle_timeout: args.idle_timeout,
     };
     let messages = uprotocol::collect(&topics, args.sovd_url.as_deref(), &stop, sink).await?;
@@ -930,6 +1006,7 @@ async fn run() -> Result<Verdict> {
             oracle_file: &oracle_file,
             oracle: &oracle,
             injections: &injections,
+            replay: &replay,
             replay_end_ms,
             sovd_url: args.sovd_url.as_deref(),
         },
@@ -1115,6 +1192,7 @@ guardian:
                 oracle_file: "test.oracle.yaml",
                 oracle: &oracle,
                 injections: &injections,
+                replay: &Replay::default(),
                 replay_end_ms: END,
                 sovd_url,
             },
@@ -1276,6 +1354,7 @@ guardian:
                 oracle_file: "o",
                 oracle: &oracle,
                 injections: &injections,
+                replay: &Replay::default(),
                 replay_end_ms: END,
                 sovd_url: None,
             },
@@ -1385,6 +1464,89 @@ guardian:
         assert!(matches!(decode_message(baseline).unwrap(), Message::Fault(f) if f.baseline));
         let battery = br#"{"temp_max":32.5,"temp_avg":30.5,"temp_min":25.5,"soc":67.0,"timestamp_ms":1200}"#;
         assert!(matches!(decode_message(battery).unwrap(), Message::Battery(b) if b.timestamp_ms == 1200));
+    }
+
+    /// Frame line as the case mutator writes it (CAN FD, TimeStamp LE).
+    fn frame(at_ms: u64, source: u64) -> String {
+        let b = (source as u32).to_le_bytes();
+        format!(
+            "{:.6} CANFD 1 Rx 100 0 0 a 16 {:02X} {:02X} {:02X} {:02X} 8C 00 8F 00 87 00 5A 00 00 00 00 00",
+            at_ms as f64 / 1000.0,
+            b[0], b[1], b[2], b[3]
+        )
+    }
+
+    #[test]
+    fn replay_maps_source_timestamps_to_replay_time() {
+        // Frames 0..7900 on time; 8000 held back by 700 ms, later ones too.
+        let mut asc = String::from("date Wed Oct 07 2026\nbase hex  timestamps absolute\n");
+        for s in (0..=7900).step_by(100) {
+            asc += &frame(s, s);
+            asc.push('\n');
+        }
+        for s in (8000..=9000).step_by(100) {
+            asc += &frame(s + 700, s);
+            asc.push('\n');
+        }
+        let r = Replay::parse(&asc);
+        assert_eq!(r.arrival(7900), Some(7900));
+        assert_eq!(r.arrival(8000), Some(8700));
+        assert_eq!(r.nominal(8000), 8000);
+        assert_eq!(r.source_end_ms(), Some(9000));
+        assert_eq!(asc_end_ms(&asc).unwrap(), 9700);
+    }
+
+    /// transport.delay: stale during the hold-back and its clear when the
+    /// delayed frame arrives, both on the replay timeline like the oracle.
+    #[test]
+    fn delayed_frames_are_evaluated_on_the_replay_timeline() {
+        let mut asc = String::new();
+        for s in (0..=7900).step_by(100) {
+            asc += &frame(s, s);
+            asc.push('\n');
+        }
+        for s in (8000..=END).step_by(100) {
+            asc += &frame(s + 700, s);
+            asc.push('\n');
+        }
+        let replay = Replay::parse(&asc);
+        let oracle = oracle::parse(
+            "guardian:
+  allow_unspecified: false
+  transitions:
+    - { at_ms: 8500, class: STREAM_STALE, level: VIOLATION, state: active }
+    - { at_ms: 8700, class: STREAM_STALE, level: VIOLATION, state: cleared }
+",
+        )
+        .unwrap();
+        let gt = "- { injection_id: d, injected_class: transport.delay, source_started_at_ms: 8000, source_finished_at_ms: 8100 }";
+        let injections = parse_ground_truth(gt).unwrap();
+        let mut m = Vec::new();
+        for s in (0..=7900).step_by(100) {
+            m.push(battery(s));
+        }
+        // Guardian: stale projected to 7900 + 600 on the source time.
+        m.push(fault("STREAM_STALE", Stage::Failed, Some(8500)));
+        m.push(battery(8000));
+        m.push(fault("STREAM_STALE", Stage::Passed, Some(8000)));
+        for s in (8100..=END).step_by(100) {
+            m.push(battery(s));
+        }
+        let r = evaluate(
+            &Case {
+                name: "t",
+                oracle_file: "o",
+                oracle: &oracle,
+                injections: &injections,
+                replay: &replay,
+                replay_end_ms: END + 700,
+                sovd_url: None,
+            },
+            &m,
+        );
+        assert_eq!(r.verdict, Verdict::Pass, "{:?} {:?}", r.notes, r.transitions);
+        assert_eq!(r.battery_end_ms, Some(END + 700));
+        assert_eq!(r.injections[0].matched, 2);
     }
 
     #[test]
