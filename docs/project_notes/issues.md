@@ -9,6 +9,16 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
+### 2026-10-07 - Golden-run orchestration runner (end2end-runner)
+- **Status**: Resolved
+- **Description**: Added `product/components/end2end-runner/` with `run_golden.sh` (bash, dev-container target) + README: builds components, starts zenoh/databroker/vss_publisher once, resets Guardian+DFM+SOVD per case, runs the collector per case, aggregates tri-state verdicts. Registered cases: `baseline` (nominal template, empty ground truth) and `signal_out_of_range` (mutator-generated).
+- **Notes**: First full runs verified in the dev container (docker image `codium-devcontainer-weeping-angel`, repo bind-mounted, run as repo uid with PATH incl. the venv). Runner bug found+fixed: `log()` wrote to stdout and corrupted the command-substitution verdict capture (produced a false overall PASS). Verdict plane is ADR-012 (mapped stream 8001); ADR-007 raw-stream correlation and DFM/SOVD verdict dimensions are not wired yet.
+
+### 2026-10-07 - Golden run findings: collector timing flake + dirty nominal baseline
+- **Status**: Open
+- **Description**: Two real product issues surfaced from the first golden runs. (1) The collector has no timing tolerance around the injection window: one run missed `PHYSICAL_TEMP_ABSOLUTE_LIMIT` by 3 ms (detection event placed at the latest battery event, arrival jitter put it at t=1997 against window start 2000) → FAIL; an immediate rerun PASSed → verdicts are flaky without tolerance (harness spec §8 open point "accepted timing tolerance", now evidence-backed). (2) The nominal template `battery_temp_with_ts.asc` is not a clean baseline: the Guardian reports `PHYSICAL_SOC_RATE Failed` repeatedly, one `PHYSICAL_TEMP_RATE`, one `THERMAL_LIMIT` (trajectory crosses 60 °C) and one `STREAM_STALE` per replay, so a `[]`-ground-truth baseline can never PASS.
+- **Notes**: (1) candidate fix: small tolerance (e.g. 100–200 ms) around window edges in the collector, or event placement anchored to the next battery event instead of the latest; needs a spec decision. (2) candidate causes: the bridge still stamps wall-clock `now_ms()` (ADR-013 migration open; jittered Δτ makes the SoC-rate limit trip), and the trajectory itself crosses THERMAL_LIMIT/WARNING — a clean baseline needs either a different nominal trace or an explicit baseline-oracle definition.
+
 ### 2026-10-06 - Evidence-report defects found during demo analysis
 - **Status**: Withdrawn
 - **Description**: Demo-derived observations (missing Stuck row in the checked-in report; sticky `BatteryTempSignalStale` indicator across scenarios) were withdrawn per ADR-003 — the demo is not authoritative, so demo-sample quirks do not become project issues.
