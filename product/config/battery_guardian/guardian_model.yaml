@@ -37,7 +37,7 @@ guardian:
   soc:
     min_percent: 0.0
     max_percent: 100.0
-    max_step_pp: 0.5
+    max_rate_pp_per_s: 5.0
 
   stuck:
     enabled: true

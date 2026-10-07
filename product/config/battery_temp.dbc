@@ -40,7 +40,7 @@ BO_ 256 BatteryTemperature: 16 BMS
 CM_ BU_ BMS "Battery Management System";
 CM_ BU_ VCU "Vehicle Control Unit";
 CM_ BO_ 256 "Battery temperature data frame sent at 10Hz";
-CM_ SG_ 256 CellTempAvg "Timestamp";
+CM_ SG_ 256 TimeStamp "Source-relative generation timestamp";
 CM_ SG_ 256 CellTempAvg "Average cell temperature across pack";
 CM_ SG_ 256 CellTempMax "Maximum cell temperature (hottest cell)";
 CM_ SG_ 256 CellTempMin "Minimum cell temperature (coldest cell)";

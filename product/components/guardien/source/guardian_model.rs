@@ -184,7 +184,7 @@ pub fn evaluate_sample(
     evaluate_soc_range(current, config, now, &mut detections);
 
     if let Some(previous) = previous {
-        evaluate_soc_step(current, previous, config, now, &mut detections);
+        evaluate_soc_rate(current, previous, config, now, &mut detections);
     }
 
     detections
@@ -429,22 +429,33 @@ fn evaluate_soc_range(
     }
 }
 
-fn evaluate_soc_step(
+fn evaluate_soc_rate(
     current: &BatterySample,
     previous: &BatterySample,
     config: &GuardianConfig,
     now: Instant,
     detections: &mut Vec<Detection>,
 ) {
-    let observed_step = (current.soc - previous.soc).abs();
-    let residual = observed_step - config.soc.max_step_pp;
+    let Some(elapsed) = current
+        .received_at
+        .checked_duration_since(previous.received_at)
+    else {
+        return;
+    };
+    let elapsed_seconds = elapsed.as_secs_f32();
+    if elapsed_seconds <= 0.0 {
+        return;
+    }
+
+    let observed_rate = ((current.soc - previous.soc) / elapsed_seconds).abs();
+    let residual = observed_rate - config.soc.max_rate_pp_per_s;
     if residual > 0.0 {
         detections.push(Detection::triggered(
             DetectionClass::PhysicalSocRate,
             DetectionLevel::Violation,
             Some(Signal::Soc),
-            Some(observed_step),
-            Some(config.soc.max_step_pp),
+            Some(observed_rate),
+            Some(config.soc.max_rate_pp_per_s),
             Some(residual),
             None,
             now,
@@ -855,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn soc_step_boundary_is_valid_and_excess_is_detected() {
+    fn soc_rate_boundary_is_valid_and_excess_is_detected() {
         let base = Instant::now();
         let cfg = config();
         let previous = nominal(base);
@@ -864,7 +875,7 @@ mod tests {
             18.0,
             20.0,
             22.0,
-            50.0 + cfg.soc.max_step_pp,
+            50.0 + cfg.soc.max_rate_pp_per_s,
         );
         assert!(!has(
             &evaluate_sample(&legal, Some(&previous), &cfg, legal.received_at),
@@ -875,10 +886,28 @@ mod tests {
             18.0,
             20.0,
             22.0,
-            50.1 + cfg.soc.max_step_pp,
+            50.1 + cfg.soc.max_rate_pp_per_s,
         );
         assert!(has(
             &evaluate_sample(&excessive, Some(&previous), &cfg, excessive.received_at),
+            DetectionClass::PhysicalSocRate
+        ));
+    }
+
+    #[test]
+    fn soc_rate_uses_actual_elapsed_receive_time() {
+        let base = Instant::now();
+        let cfg = config();
+        let previous = nominal(base);
+        let delayed = sample(
+            base + Duration::from_secs(2),
+            18.0,
+            20.0,
+            22.0,
+            50.0 + cfg.soc.max_rate_pp_per_s,
+        );
+        assert!(!has(
+            &evaluate_sample(&delayed, Some(&previous), &cfg, delayed.received_at),
             DetectionClass::PhysicalSocRate
         ));
     }

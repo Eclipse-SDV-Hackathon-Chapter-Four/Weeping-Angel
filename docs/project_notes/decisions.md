@@ -177,7 +177,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ Subscribers that join after a transition miss it (no retain on Zenoh publish).
 - ❌ The existing mapped `GuardianFaultEvent` implementation must be replaced or separated from the raw GuardianEvidenceEvent contract.
 
-### ADR-008: Source-relative generation timestamps accompany battery messages (amends ADR-004) (2026-10-07)
+### ADR-008: Source-relative generation timestamps accompany battery messages (amends ADR-004; payload placement amended by ADR-011) (2026-10-07)
 
 **Context:**
 - ADR-004 keeps the Guardian's model time base on receiver-side receive timestamps and dropped ADR-001's heartbeat.
@@ -243,3 +243,47 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 **Consequences:**
 - ✅ Focused v1; later phases have a documented place in the interface spec.
 - ❌ DoD 7/8 not met in v1 (documented only).
+
+### ADR-011: Product CAN frame carries the source timestamp explicitly (amends ADR-008) (2026-10-07)
+
+**Context:**
+- ADR-008 defined a zero-based source-generation timestamp but retained the former 8-byte demo payload and therefore described the timestamp as out-of-band metadata.
+- The canonical product assets now use a timestamped BatteryTemperature frame: four timestamp bytes followed by the four existing 16-bit battery signals.
+- The Case Mutator must preserve source identity while independently changing replay/arrival timing for transport-delay cases.
+
+**Decision:**
+- The product `BatteryTemperature` frame `0x100` is 16 bytes: unsigned 32-bit `TimeStamp` in milliseconds at the front, followed by `CellTempAvg`, `CellTempMax`, `CellTempMin`, `StateOfCharge`, and four reserved bytes.
+- `TimeStamp` starts at `0`, uses little-endian byte order consistently with the other frame signals, and remains unchanged by value mutation, frame deletion, or transport-delay scheduling. The reserved bytes remain uninterpreted and unchanged.
+- The unchanged value is propagated into `BatteryTempEvent.timestamp_ms`. Local monotonic receive time remains the Guardian time base for temperature rate and stale evaluation; ADR-008's permitted timestamp-gap drop detection remains unchanged.
+- This amends only ADR-008's out-of-band-metadata clause. The decision not to add sequence numbers remains in force, and the 8-byte `demo/` frame remains a non-authoritative historical reference.
+
+**Alternatives Considered:**
+- Keep the product frame at 8 bytes and carry timestamp only outside CAN → Rejected: it does not match the canonical timestamped ASC asset and prevents the ASC mutator from preserving generation time independently of replay timing.
+- Replace timestamp with a sequence number → Rejected: elapsed source time is required for evidence correlation and the no-sequence decision remains valid.
+
+**Consequences:**
+- ✅ Value mutations and drops preserve the original generation identity directly in the replay artifact.
+- ✅ Transport delay can change ASC replay time without rewriting the embedded generation timestamp.
+- ❌ CAN provider/VSS mapping and bridge still need implementation work to propagate `TimeStamp` unchanged instead of generating wall-clock time.
+
+### ADR-011: Evidence Collector verdict on the Guardian fault-event stream (2026-10-07)
+
+**Context:**
+- The Guardian publishes fault-level changes (`GuardianFaultEvent`) on `//guardian/1001/1/8001`; the events carry no time.
+- The collector's former 10 Hz status model and the contract's injection→detection `mapping` no longer exist (ADR-005, contract v3).
+- Several failures may legitimately occur during one case, also before the injection.
+
+**Decision:**
+- The collector subscribes to `//guardian/1001/1/8001` and `//battery-vss/9001/1/9001`; each fault event is placed at the `timestamp_ms` of the latest battery event, rebased to the first battery event (ADR-008 source timeline).
+- Ground truth is the mutator record (`<prefix>.json`); `started_at`/`finished_at` are ms on that timeline (`finished_at` or `started_at + duration_ms`).
+- An injection passes if a non-baseline `Failed` event of an expected class arrives within `started_at <= t <= finished_at`; failures outside the window are allowed and reported. A baseline case passes only without failures.
+- Expected classes per injected class live in the collector (`product/components/evidence_collector/expected_observations.yaml`) as evaluation knowledge, not as a diagnostic mapping; an empty list (e.g. `signal.combination`) yields INCONCLUSIVE.
+
+**Alternatives Considered:**
+- Collector receive time or epoch `started_at` as time base → Rejected: includes pipeline latency or needs clock sync; not replay-deterministic.
+- Fail on any failure outside the window → Rejected: multiple and earlier failures are legitimate.
+
+**Consequences:**
+- ✅ Deterministic window check on one shared timeline; works with today's wall-clock bridge via rebasing.
+- ❌ Only DFM-mapped class/level pairs reach 8001; utilization warnings are invisible until the raw `GuardianEvidenceEvent` stream (ADR-007) exists.
+- ❌ The mutator doc's epoch `started_at` (TODO D7) must switch to source-timeline ms.

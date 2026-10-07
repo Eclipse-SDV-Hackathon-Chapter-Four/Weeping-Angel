@@ -1,0 +1,17 @@
+[package]
+name = "evidence_collector"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+
+# uProtocol over Zenoh, same versions as the demo services
+up-rust = "0.9"
+up-transport-zenoh = "0.9"
+zenoh = { version = "1", features = ["unstable"] }
