@@ -127,3 +127,8 @@ is not authoritative) — they do not become open issues here.
 - **Status**: Resolved
 - **Description**: Changed the Live Scenario Observer's default listening address from `127.0.0.1:8090` to `0.0.0.0:8090` (`DEFAULT_ADDR` in `evidence_collector/src/observer/mod.rs`). Updated the runner default `E2E_OBSERVER_ADDR`, the `live_observer.md` contract, `info.md`, `components_and_channels.md` (E19), `key_facts.md`, and the end2end-runner README. In `run_golden.sh` the health check and logged URL now substitute `0.0.0.0` with `127.0.0.1` so the displayed URL stays browser-usable.
 - **Notes**: `cargo build --features observer` passes; `bash -n run_golden.sh` clean. Recorded as a dated amendment to ADR-016 (see `decisions.md`). Binds all interfaces, so the observer is reachable from the network; override with `--observer-addr 127.0.0.1:8090` for host-local runs. Not DoD-critical (v1 extension).
+
+### 2026-10-07 - run_campaign starts the live observer per case
+- **Status**: Resolved
+- **Description**: `tools/run_case.sh` gained the `E2E_OBSERVER`/`E2E_OBSERVER_ADDR` env handling already present in the end2end-runner: when `E2E_OBSERVER=1` it builds the collector with `--features observer`, passes `--observer --observer-addr`, and waits for `http://<loopback>/health` before replay. `tools/run_campaign.sh` now defaults `E2E_OBSERVER=1` (exported to `run_case.sh`), builds the collector with the feature, and logs the observer URL per case; set `E2E_OBSERVER=0` to disable.
+- **Notes**: `bash -n` clean on both scripts. Per ADR-016 the collector serves one experiment, so the observer restarts with each case (same behavior as the end2end-runner). Observer startup is non-fatal to the verdict. Docs updated: `key_facts.md`, script headers.

@@ -55,7 +55,7 @@ Evidence Collector process (main binary)
   └─ observer module ...... live state, ring buffer, SSE, assets  [feature "observer"]
         │  in-process read of collector state
         ▼
-   HTTP server (axum) on 127.0.0.1:8090
+   HTTP server (axum) on 0.0.0.0:8090
         │  GET /            embedded static frontend
         │  GET /events      Server-Sent Events (snapshot + deltas)
         ▼
@@ -159,7 +159,9 @@ library — never re-derived by hand or in the frontend (ADR-005):
 
 ## 7. HTTP / SSE interface
 
-- Bind address `127.0.0.1:8090` (port 8080 is the Guardian).
+- Bind address `0.0.0.0:8090` (port 8080 is the Guardian). Binds all
+  interfaces; restrict to a loopback address with `--observer-addr` if the
+  observer must stay host-local.
 - `GET /` — embedded static frontend (single-file or `rust-embed` assets).
 - `GET /events` — `text/event-stream`; the first event is always `snapshot`,
   followed by `sample`/`detection` deltas. No coalescing.
@@ -185,7 +187,7 @@ library — never re-derived by hand or in the frontend (ADR-005):
 ## 9. CLI and feature flag
 
 - Cargo feature: `observer` (off by default).
-- CLI: `--observer` enables the module; `--observer-addr 127.0.0.1:8090`
+- CLI: `--observer` enables the module; `--observer-addr 0.0.0.0:8090`
   overrides the bind address.
 - Example: `cargo run --features observer -- <prefix> --observer`.
 - With the feature disabled the option is absent and the existing CLI and

@@ -36,7 +36,7 @@ E2E_CASE_TIMEOUT_S="${E2E_CASE_TIMEOUT_S:-240}"   # per-case collector deadline
 E2E_REBUILD="${E2E_REBUILD:-0}"                   # 1 = force binary rebuild
 E2E_REGEN_CASES="${E2E_REGEN_CASES:-0}"           # 1 = regenerate case artifacts
 E2E_OBSERVER="${E2E_OBSERVER:-0}"                 # 1 = serve the live observer (ADR-016)
-E2E_OBSERVER_ADDR="${E2E_OBSERVER_ADDR:-127.0.0.1:8090}"
+E2E_OBSERVER_ADDR="${E2E_OBSERVER_ADDR:-0.0.0.0:8090}"
 
 TARGET="$PRODUCT_DIR/components"
 BIN_GUARDIAN="$TARGET/guardien/target/debug/guardian"
@@ -310,12 +310,14 @@ run_case() { # <name> <prefix_abs> <case_dir>
   local col_pid=$!
 
   if [ "$E2E_OBSERVER" = 1 ]; then
+    # E2E_OBSERVER_ADDR is a bind address; connect/display via loopback.
+    local observer_url="${E2E_OBSERVER_ADDR/0.0.0.0/127.0.0.1}"
     local w
     for ((w = 0; w < 40; w++)); do
-      curl -fsS "http://$E2E_OBSERVER_ADDR/health" >/dev/null 2>&1 && break
+      curl -fsS "http://$observer_url/health" >/dev/null 2>&1 && break
       sleep 0.25
     done
-    log "case $name: live observer on http://$E2E_OBSERVER_ADDR (until this case's collector exits)"
+    log "case $name: live observer on http://$observer_url (until this case's collector exits)"
   fi
 
   # The collector prints "replay lasts ... ms" once it is subscribed.

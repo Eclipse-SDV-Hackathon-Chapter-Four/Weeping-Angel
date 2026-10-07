@@ -12,6 +12,9 @@
 # zenohd and the Data Broker is stopped afterwards.
 # Logs: run/, report: [report.json] or reports/<case>.json. Exit code = collector's
 # (0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 error).
+# Env: E2E_OBSERVER=1 builds the collector with the `observer` feature and serves
+#      the live observer during the case (ADR-016); E2E_OBSERVER_ADDR overrides
+#      its bind address (default 0.0.0.0:8090).
 set -euo pipefail
 trap 'exit 3' ERR   # a failing build/start step is an error, not a FAIL verdict
 
@@ -29,6 +32,8 @@ REPORT_ARGS=()
 COLLECTOR="$ROOT/product/components/evidence_collector/target/debug/evidence_collector"
 export ZENOH_CONNECT="${ZENOH_CONNECT:-tcp/127.0.0.1:7447}"
 E2E_CASE_TIMEOUT_S="${E2E_CASE_TIMEOUT_S:-240}"   # per-case collector deadline
+E2E_OBSERVER="${E2E_OBSERVER:-0}"                 # 1 = serve the live observer (ADR-016)
+E2E_OBSERVER_ADDR="${E2E_OBSERVER_ADDR:-0.0.0.0:8090}"
 
 [ -f "$PREFIX.asc" ] || { echo "run_case: $PREFIX.asc not found" >&2; exit 3; }
 [ -f "$PREFIX.ground_truth.yaml" ] || [ -f "$PREFIX.json" ] \
@@ -42,7 +47,10 @@ echo "== building (if needed)"
 [ -x product/components/vss_bridge/target/debug/vss_publisher ] || bash "$TOOLS/build_vss_bridge.sh"
 [ -x product/components/fault-lib/target/debug/dfm_bin ] || bash "$TOOLS/build_dfm.sh"
 [ -x product/components/dfm_sovd_bridge/target/debug/dfm_sovd_bridge ] || bash "$TOOLS/build_dfm_sovd_bridge.sh"
-(cd product/components/evidence_collector && cargo build -q)   # always: cheap when up to date
+# The live observer is a Cargo feature; build it in when requested.
+collector_features=()
+[ "$E2E_OBSERVER" = 1 ] && collector_features=(--features observer)
+(cd product/components/evidence_collector && cargo build -q "${collector_features[@]}")   # always: cheap when up to date
 
 source "$TOOLS/ensure_python_env.sh"
 ensure_python_env || { echo "run_case: replay python environment incomplete (E2E_VENV=${E2E_VENV:-$HOME/.venv}, needs cantools/python-can/pyyaml)" >&2; exit 3; }
@@ -82,7 +90,11 @@ pgrep -x vss_publisher >/dev/null 2>&1 \
 bash "$TOOLS/run_guardian.sh"
 
 echo "== collector listening, replaying $(basename "$PREFIX").asc (takes as long as the recording)"
-"$COLLECTOR" "$PREFIX" "${REPORT_ARGS[@]}" >"$RUN_DIR/collector.out" 2>"$RUN_DIR/collector.log" &
+observer_args=()
+if [ "$E2E_OBSERVER" = 1 ]; then
+  observer_args=(--observer --observer-addr "$E2E_OBSERVER_ADDR")
+fi
+"$COLLECTOR" "$PREFIX" "${REPORT_ARGS[@]}" "${observer_args[@]}" >"$RUN_DIR/collector.out" 2>"$RUN_DIR/collector.log" &
 collector_pid=$!
 # Readiness: the collector prints "replay lasts ... ms" once it is subscribed;
 # replaying before that races the subscription and loses events.
@@ -96,6 +108,15 @@ if [ "$_subscribed" != 1 ]; then
   echo "run_case: collector never became ready (see $RUN_DIR/collector.log)" >&2
   kill "$collector_pid" 2>/dev/null || true
   exit 3
+fi
+if [ "$E2E_OBSERVER" = 1 ]; then
+  # E2E_OBSERVER_ADDR is a bind address; connect/display via loopback.
+  observer_url="${E2E_OBSERVER_ADDR/0.0.0.0/127.0.0.1}"
+  for _i in $(seq 1 40); do
+    if curl -fsS "http://$observer_url/health" >/dev/null 2>&1; then break; fi
+    sleep 0.25
+  done
+  echo "== live observer on http://$observer_url (until this case's collector exits)"
 fi
 bash "$TOOLS/start_can.sh" "$PREFIX.asc" >"$RUN_DIR/can.log" 2>&1 \
   || { echo "run_case: replay failed, see $RUN_DIR/can.log" >&2; kill "$collector_pid" 2>/dev/null; exit 3; }

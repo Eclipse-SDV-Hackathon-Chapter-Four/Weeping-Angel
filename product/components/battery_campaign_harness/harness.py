@@ -289,10 +289,24 @@ def combined_incidents(definition: dict[str, Any], guardian: dict[str, Any]) -> 
     return result
 
 
+def _runnable(path: Path) -> bool:
+    try:
+        subprocess.run(
+            [str(path), "--help"], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
 def binary_paths(arguments: argparse.Namespace) -> tuple[Path, Path]:
     mutator = Path(arguments.mutator) if arguments.mutator else MANIFEST.parent / "target/debug/case-mutator"
     oracle = Path(arguments.oracle) if arguments.oracle else MANIFEST.parent / "target/debug/case-oracle"
-    if mutator.is_file() and oracle.is_file():
+    # A stale cross-toolchain binary (e.g. a nix-built artifact shared with the
+    # host inside a container) exists but cannot be executed (ELF interpreter
+    # missing) — probe with --help instead of trusting the file.
+    if mutator.is_file() and oracle.is_file() and _runnable(mutator) and _runnable(oracle):
         return mutator, oracle
     command = ["cargo", "build", "--manifest-path", str(MANIFEST), "--locked", "--bins"]
     try:

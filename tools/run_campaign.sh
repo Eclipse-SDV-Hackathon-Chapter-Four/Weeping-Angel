@@ -13,7 +13,9 @@
 #    summary to reports/campaign-<timestamp>/summary.txt.
 # Exit code: 0 if every experiment passed, 1 otherwise, 3 if build or generation failed.
 # Env: E2E_VENV (python env for harness + replay, self-provisioned),
-#      E2E_CASE_TIMEOUT_S (per-experiment collector deadline, default 240).
+#      E2E_CASE_TIMEOUT_S (per-experiment collector deadline, default 240),
+#      E2E_OBSERVER (1 = serve the live observer during each case, default 1),
+#      E2E_OBSERVER_ADDR (observer bind address, default 0.0.0.0:8090).
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +26,12 @@ SUMMARY="$OUT/summary.txt"
 
 mkdir -p "$OUT" "$OUT/logs"
 cd "$ROOT"
+
+# Live Scenario Observer (ADR-016): the campaign serves it for every case by
+# default; set E2E_OBSERVER=0 to run without it. Read by run_case.sh.
+E2E_OBSERVER="${E2E_OBSERVER:-1}"
+E2E_OBSERVER_ADDR="${E2E_OBSERVER_ADDR:-0.0.0.0:8090}"
+export E2E_OBSERVER E2E_OBSERVER_ADDR
 
 # Shared self-provisioning: the harness needs pyyaml, the replay needs
 # cantools/python-can — one venv covers both (same convention as run_golden).
@@ -36,7 +44,9 @@ echo "== building components"
 for b in guardian vss_bridge dfm dfm_sovd_bridge; do
   bash "$TOOLS/build_$b.sh" || { echo "run_campaign: build_$b.sh failed" >&2; exit 3; }
 done
-(cd product/components/evidence_collector && cargo build) \
+collector_features=()
+[ "$E2E_OBSERVER" = 1 ] && collector_features=(--features observer)
+(cd product/components/evidence_collector && cargo build "${collector_features[@]}") \
   || { echo "run_campaign: evidence collector build failed" >&2; exit 3; }
 
 echo "== generating experiments into $EXPERIMENTS"

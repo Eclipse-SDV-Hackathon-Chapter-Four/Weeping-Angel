@@ -61,7 +61,7 @@ Exit code: `0` only if every case verdict is `PASS`; `1` otherwise
 | `E2E_REBUILD` | `0` | `1` = rebuild all binaries before the run |
 | `E2E_REGEN_CASES` | `0` | `1` = regenerate mutator-generated case artifacts |
 | `E2E_OBSERVER` | `0` | `1` = run each case's collector with the live observer (ADR-016); also builds `--features observer` |
-| `E2E_OBSERVER_ADDR` | `127.0.0.1:8090` | Observer bind address when `E2E_OBSERVER=1` |
+| `E2E_OBSERVER_ADDR` | `0.0.0.0:8090` | Observer bind address when `E2E_OBSERVER=1` |
 | `E2E_VENV` | `$HOME/.venv` | Python venv used for the CAN replay; created + populated by the runner when missing (mirrors the devcontainer `post-create` convention) |
 | `ZENOH_LOG` / `DATABROKER_LOG` | run dir / default | Log destinations of `zenohd` / `databroker`; the runner redirects both into `logs/` of the run dir (default `/tmp/…log` when the start scripts run standalone) |
 
@@ -192,7 +192,7 @@ evidence_collector <prefix> \
 | `--battery-topic URI` | Optional; default `//battery-vss/9001/1/9001` |
 | `--expectations FILE` | Optional; default `expected_observations.yaml` in the component |
 | `--observer` | Optional (feature `observer`); serve the read-only live observer (ADR-016) |
-| `--observer-addr ADDR` | Optional; observer bind address, default `127.0.0.1:8090` |
+| `--observer-addr ADDR` | Optional; observer bind address, default `0.0.0.0:8090` |
 | `--guardian-model FILE` | Optional; model YAML for the static bands, default `product/config/battery_guardian/guardian_model.yaml` |
 | `ZENOH_CONNECT` | Zenoh router endpoint |
 
