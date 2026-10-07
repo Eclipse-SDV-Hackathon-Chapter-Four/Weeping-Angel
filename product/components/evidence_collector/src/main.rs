@@ -51,7 +51,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::process::ExitCode;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -109,14 +109,17 @@ struct FaultEvent {
 #[derive(Deserialize, Clone, Debug)]
 struct BatteryEvent {
     timestamp_ms: u64,
+    /// When the collector received it (set by the listener).
+    #[serde(skip)]
+    received: Option<Instant>,
 }
 
 #[derive(Debug)]
 enum Message {
     Fault(FaultEvent),
     Battery(BatteryEvent),
-    /// One OpenSOVD poll; `None` if the poll failed.
-    Sovd(Option<sovd::Snapshot>),
+    /// One OpenSOVD poll (`None` if it failed) and when it was answered.
+    Sovd(Option<sovd::Snapshot>, Option<Instant>),
 }
 
 /// Decodes a payload as fault event (has `fault_id`) or battery event.
@@ -256,23 +259,33 @@ struct Timeline {
 /// Places fault events and OpenSOVD activations on the source timeline.
 /// An activation is `test_failed` going true or the occurrence counter rising
 /// (one activation per counted occurrence, so short faults between two polls
-/// are not lost).
+/// are not lost). A poll is placed at the last battery time plus the time
+/// since that battery event arrived, so polls during a stream gap (dropout)
+/// still advance on the timeline.
 fn timeline(messages: &[Message]) -> Timeline {
     let mut clock = Clock::default();
     let mut now = None;
+    let mut last_arrival: Option<Instant> = None;
     let mut faults = Vec::new();
     let mut sovd = SovdTimeline::default();
     let mut previous = sovd::Snapshot::new();
     for m in messages {
         match m {
-            Message::Battery(b) => now = Some(clock.battery(b.timestamp_ms)),
+            Message::Battery(b) => {
+                now = Some(clock.battery(b.timestamp_ms));
+                last_arrival = b.received;
+            }
             Message::Fault(f) => faults.push(TimedFault {
                 t_ms: f.evidence.timestamp_ms.and_then(|ts| clock.other(ts)).or(now),
                 event: f.clone(),
             }),
-            Message::Sovd(None) => sovd.errors += 1,
-            Message::Sovd(Some(snapshot)) => {
+            Message::Sovd(None, _) => sovd.errors += 1,
+            Message::Sovd(Some(snapshot), polled) => {
                 sovd.polls += 1;
+                let at = match (now, last_arrival, polled) {
+                    (Some(t), Some(a), Some(p)) => Some(t + p.saturating_duration_since(a).as_millis() as u64),
+                    _ => now,
+                };
                 for (code, state) in snapshot {
                     let before = previous.get(code).copied().unwrap_or_default();
                     let counted = state.occurrences.saturating_sub(before.occurrences);
@@ -283,7 +296,7 @@ fn timeline(messages: &[Message]) -> Timeline {
                     };
                     for _ in 0..new {
                         sovd.activations.push(SovdActivation {
-                            t_ms: now,
+                            t_ms: at,
                             code: code.clone(),
                         });
                     }
@@ -902,7 +915,10 @@ mod tests {
     const END: u64 = 19_900;
 
     fn battery(t: u64) -> Message {
-        Message::Battery(BatteryEvent { timestamp_ms: t })
+        Message::Battery(BatteryEvent {
+            timestamp_ms: t,
+            received: None,
+        })
     }
 
     /// Fault event as the Guardian publishes it; `ts` is `evidence.timestamp_ms`.
@@ -924,7 +940,7 @@ mod tests {
         match m {
             Message::Fault(f) => Message::Fault(f.clone()),
             Message::Battery(b) => Message::Battery(b.clone()),
-            Message::Sovd(s) => Message::Sovd(s.clone()),
+            Message::Sovd(s, at) => Message::Sovd(s.clone(), *at),
         }
     }
 
@@ -1149,10 +1165,13 @@ guardian:
     }
 
     fn sovd(code: &str, active: bool, occurrences: u32) -> Message {
-        Message::Sovd(Some(sovd::Snapshot::from([(
-            code.to_owned(),
-            sovd::FaultState { active, occurrences },
-        )])))
+        Message::Sovd(
+            Some(sovd::Snapshot::from([(
+                code.to_owned(),
+                sovd::FaultState { active, occurrences },
+            )])),
+            None,
+        )
     }
 
     fn with_sovd(sovd_extra: Vec<(u64, Message)>) -> Vec<Message> {
@@ -1186,10 +1205,36 @@ guardian:
         assert_eq!(r.verdict, Verdict::Pass);
     }
 
+    /// Stale during a dropout: no battery events, but OpenSOVD polls go on.
+    #[test]
+    fn sovd_polls_during_a_gap_advance_on_the_timeline() {
+        let stale_oracle = "
+guardian:
+  allow_unspecified: false
+  transitions:
+    - { at_ms: 8500, class: STREAM_STALE, level: VIOLATION, state: active }
+";
+        let base = Instant::now();
+        let at = |ms: u64| Some(base + Duration::from_millis(ms));
+        let mut m = vec![sovd("BatteryTempStreamStale", false, 0)];
+        for t in (0..=7900).step_by(100) {
+            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t) }));
+        }
+        m.push(fault("STREAM_STALE", Stage::Failed, Some(8500)));
+        let Message::Sovd(snapshot, _) = sovd("BatteryTempStreamStale", true, 1) else { unreachable!() };
+        m.push(Message::Sovd(snapshot, at(8550)));
+        for t in (8600..=END).step_by(100) {
+            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t) }));
+        }
+        let r = check_with(stale_oracle, Some("http://sovd"), &m);
+        assert_eq!(r.transitions[0].sovd_visible_at_ms, Some(8550));
+        assert!(r.sovd.unwrap().not_visible.is_empty());
+    }
+
     #[test]
     fn sovd_unreachable_is_inconclusive() {
         let mut m = stream(&limit_ok());
-        m.insert(0, Message::Sovd(None));
+        m.insert(0, Message::Sovd(None, None));
         let r = check_with(ORACLE, Some("http://sovd"), &m);
         assert_eq!(r.verdict, Verdict::Inconclusive);
         assert_eq!(r.sovd.unwrap().errors, 1);

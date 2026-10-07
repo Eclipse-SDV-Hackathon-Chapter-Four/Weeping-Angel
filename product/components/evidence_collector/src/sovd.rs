@@ -88,7 +88,7 @@ pub fn spawn_poller(url: String, tx: mpsc::UnboundedSender<Message>) -> tokio::t
             }
             .await
             .ok();
-            if tx.send(Message::Sovd(snapshot)).is_err() {
+            if tx.send(Message::Sovd(snapshot, Some(std::time::Instant::now()))).is_err() {
                 break;
             }
         }

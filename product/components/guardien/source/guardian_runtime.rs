@@ -70,7 +70,9 @@ impl GuardianRuntime {
                     None,
                     now,
                 );
-                stale.sample_timestamp_ms = self.last_timestamp_ms;
+                stale.sample_timestamp_ms = self
+                    .last_timestamp_ms
+                    .map(|last| last + projected_age_ms(age, config));
                 transitions.push(stale);
             }
         } else if self.stream_stale {
@@ -172,6 +174,15 @@ impl GuardianRuntime {
     }
 }
 
+/// Receive age projected onto the source timeline (ADR-013): rounded up to
+/// whole evaluation periods, since staleness is decided once per cycle. A
+/// stale fault has no causing sample, so it is placed at the last source
+/// timestamp plus this age instead of at the last sample itself.
+fn projected_age_ms(age: std::time::Duration, config: &GuardianConfig) -> u64 {
+    let period_ms = config.evaluation_period().as_millis().max(1) as u64;
+    (age.as_millis() as u64).div_ceil(period_ms) * period_ms
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
@@ -259,6 +270,22 @@ mod tests {
         assert!(runtime
             .cycle(stale_at + cfg.evaluation_period(), &cfg)
             .is_empty());
+    }
+
+    #[test]
+    fn stale_is_placed_at_the_projected_source_time() {
+        let base = origin();
+        let cfg = config();
+        // Detected at the first cycle after the timeout, wherever that cycle
+        // falls relative to the last arrival: always 600 ms on the source time.
+        for late_ms in [501, 570, 600] {
+            let mut rt = GuardianRuntime::new();
+            rt.receive_sample(generated(7_900, base));
+            rt.cycle(base, &cfg);
+            let stale = rt.cycle(base + Duration::from_millis(late_ms), &cfg);
+            assert_eq!(stale[0].class, DetectionClass::StreamStale);
+            assert_eq!(stale[0].sample_timestamp_ms, Some(8_500), "detected after {late_ms} ms");
+        }
     }
 
     #[test]

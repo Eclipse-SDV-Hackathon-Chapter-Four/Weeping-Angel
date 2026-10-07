@@ -39,7 +39,10 @@ impl UListener for Forwarder {
             return;
         };
         match decode_message(payload) {
-            Ok(m) => {
+            Ok(mut m) => {
+                if let Message::Battery(b) = &mut m {
+                    b.received = Some(std::time::Instant::now());
+                }
                 let _ = self.tx.send(m);
             }
             Err(e) => eprintln!("warning: undecodable message ignored: {e}"),
@@ -125,7 +128,7 @@ pub async fn collect(
                                 eprintln!("fault event: {} {} {:?}", f.detection_class, f.level, f.stage);
                             }
                         }
-                        Message::Sovd(_) => {}
+                        Message::Sovd(..) => {}
                     }
                     messages.push(message);
                 }
