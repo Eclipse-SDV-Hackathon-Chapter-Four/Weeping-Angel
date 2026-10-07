@@ -874,7 +874,10 @@ The Collector should not need to reimplement the physical model to decide whethe
 
 ---
 
-## 11. Mapping to the current v1 fault campaign
+## 11. Illustrative observations in the current fault campaign
+
+This table documents intended campaign examples. It is not a diagnostic
+mapping and does not allow the Guardian to infer an injected root cause.
 
 | Injected class | Primary Guardian observation |
 |---|---|
@@ -885,6 +888,7 @@ The Collector should not need to reimplement the physical model to decide whethe
 | `transport.delay` | `STREAM_STALE` |
 | `transport.drop` | `STREAM_STALE` |
 | `source.dropout` | `STREAM_STALE` |
+| `signal.combination` | Zero, one, or multiple detection classes, depending on its component mutations |
 
 A spike may legitimately violate more than one physical invariant. `PHYSICAL_TEMP_RATE` is the intended primary observation for the campaign scenario; the injected spike should therefore remain inside the absolute temperature range when possible.
 

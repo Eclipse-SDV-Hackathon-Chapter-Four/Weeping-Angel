@@ -11,7 +11,7 @@
 //! active and `Passed` once the last one cleared.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ const ALL_CLASSES: [DetectionClass; 9] = [
 ];
 
 /// Fault key of a detection class — must match the `Text` fault ids in
-/// `product/config/catalog/battery_guardian.json`.
+/// `product/config/battery_guardian/guardian_diagnostics.json`.
 pub const fn fault_key(class: DetectionClass) -> &'static str {
     match class {
         DetectionClass::StreamStale => "BatteryTempStreamStale",
@@ -165,9 +165,9 @@ fn env_to_metadata(env: &[(String, String)]) -> MetadataVec {
     MetadataVec::try_from(&pairs[..]).unwrap_or_else(|_| MetadataVec::new())
 }
 
-fn build_catalog(catalog_path: &PathBuf) -> fault_lib::catalog::FaultCatalog {
+fn build_catalog(catalog_path: &Path) -> fault_lib::catalog::FaultCatalog {
     FaultCatalogBuilder::new()
-        .json_file(catalog_path.clone())
+        .json_file(catalog_path.to_path_buf())
         .expect("load fault catalog json")
         .build()
 }
@@ -199,12 +199,7 @@ impl FaultState {
     }
 }
 
-fn worker(
-    catalog_path: &PathBuf,
-    sovd_path: &str,
-    rx: &Receiver<FaultCommand>,
-    ready: &AtomicBool,
-) {
+fn worker(catalog_path: &Path, sovd_path: &str, rx: &Receiver<FaultCommand>, ready: &AtomicBool) {
     // FaultApi initialisation requires the DFM to be up (IPC sink + catalog
     // hash verification). Retry until it succeeds.
     let mut attempt: u32 = 0;
@@ -216,7 +211,7 @@ fn worker(
                 break api;
             }
             Err(error) => {
-                if attempt == 1 || attempt % 10 == 0 {
+                if attempt == 1 || attempt.is_multiple_of(10) {
                     warn!(%error, attempt, "DFM not ready; retrying");
                 }
                 thread::sleep(Duration::from_millis(500));
@@ -292,7 +287,7 @@ mod tests {
     #[test]
     fn catalog_contains_every_fault_key() {
         let catalog: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../config/catalog/battery_guardian.json"
+            "../../../config/battery_guardian/guardian_diagnostics.json"
         ))
         .expect("catalog json");
         let ids: HashSet<&str> = catalog["faults"]
@@ -314,7 +309,10 @@ mod tests {
         assert_eq!(state.apply(class, Some(Signal::TempMin), true), Some(true));
         assert_eq!(state.apply(class, Some(Signal::TempMax), true), None);
         assert_eq!(state.apply(class, Some(Signal::TempMin), false), None);
-        assert_eq!(state.apply(class, Some(Signal::TempMax), false), Some(false));
+        assert_eq!(
+            state.apply(class, Some(Signal::TempMax), false),
+            Some(false)
+        );
     }
 
     #[test]

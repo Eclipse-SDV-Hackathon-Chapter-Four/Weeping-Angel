@@ -461,8 +461,10 @@ mod tests {
     use super::*;
 
     fn config() -> GuardianConfig {
-        GuardianConfig::from_yaml_str(include_str!("../../../config/battery_guardian.yaml"))
-            .expect("test configuration")
+        GuardianConfig::from_yaml_str(include_str!(
+            "../../../config/battery_guardian/guardian_model.yaml"
+        ))
+        .expect("test configuration")
     }
 
     fn sample(at: Instant, temp_min: f32, temp_avg: f32, temp_max: f32, soc: f32) -> BatterySample {

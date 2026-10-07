@@ -208,7 +208,7 @@ fn require_non_negative(name: &str, value: f32) -> Result<()> {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = include_str!("../../../config/battery_guardian.yaml");
+    const CONFIG: &str = include_str!("../../../config/battery_guardian/guardian_model.yaml");
 
     #[test]
     fn supplied_configuration_is_valid() {

@@ -20,4 +20,9 @@ is not authoritative) — they do not become open issues here.
 ### 2026-10-06 - Implement physical-model Battery Guardian
 - **Status**: Resolved
 - **Description**: Added the standalone product Guardian under `product/components/guardien` with validated YAML configuration, periodic receive-time evaluation, typed detections, and a dummy reporter.
-- **Notes**: Added a cached Docker/Make workflow; `make check` passes formatting, Clippy, and all 23 tests. Final DFM/Evidence Collector reporting remains intentionally out of scope.
+- **Notes**: The initial nested-Docker Make workflow passed formatting, Clippy, and all 23 tests. On 2026-10-07 it was replaced with direct Cargo targets for the shared VS Code dev container; the component-specific `Dockerfile.dev` was removed. The initial dummy reporter was subsequently replaced by the working DFM reporter retained in ADR-005.
+
+### 2026-10-07 - Separate Guardian configuration and injection ground truth
+- **Status**: Resolved
+- **Description**: Split model parameters, the existing DFM catalog, and injection ground truth into canonical artifacts under `product/config/battery_guardian`.
+- **Notes**: Added `signal.combination`, a strict injection-model validator, and 10 validator tests; retained the existing DFM reporter. Dev-container `make check` passes all 27 Rust tests and the configuration checks.

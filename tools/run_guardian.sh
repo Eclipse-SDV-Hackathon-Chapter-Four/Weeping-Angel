@@ -26,8 +26,8 @@ GUARDIAN_BIN="$ROOT_DIR/product/components/guardien/target/debug/guardian"
 # Environment variables read by the Guardian (override by exporting them before calling this script)
 export ZENOH_CONNECT="${ZENOH_CONNECT:-tcp/127.0.0.1:7447}"   # Zenoh router endpoint (unset/empty = peer discovery)
 [ -n "$ZENOH_LISTEN" ] && export ZENOH_LISTEN                  # optional Zenoh listen endpoint
-export GUARDIAN_CONFIG="${GUARDIAN_CONFIG:-$ROOT_DIR/product/config/battery_guardian.yaml}"
-export GUARDIAN_FAULT_CATALOG="${GUARDIAN_FAULT_CATALOG:-$ROOT_DIR/product/config/catalog/battery_guardian.json}"
+export GUARDIAN_CONFIG="${GUARDIAN_CONFIG:-$ROOT_DIR/product/config/battery_guardian/guardian_model.yaml}"
+export GUARDIAN_FAULT_CATALOG="${GUARDIAN_FAULT_CATALOG:-$ROOT_DIR/product/config/battery_guardian/guardian_diagnostics.json}"
 export GUARDIAN_SOVD_PATH="${GUARDIAN_SOVD_PATH:-battery_guardian}"
 export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8080}"

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guardian build dependency; idempotent for already initialized worktrees.
+git submodule update --init product/components/fault-lib
+
 # Python venv for the evidence collector / Robot Framework (kept outside the repo tree).
 python3 -m venv "$HOME/.venv"
 "$HOME/.venv/bin/pip" install --quiet --upgrade pip

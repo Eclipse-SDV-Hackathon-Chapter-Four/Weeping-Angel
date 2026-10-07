@@ -12,9 +12,11 @@
     "PATH": "/home/vscode/.venv/bin:${containerEnv:PATH}"
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "forwardPorts": [8080],
   "customizations": {
     "vscode": {
       "extensions": [
+        "openai.chatgpt",
         "rust-lang.rust-analyzer",
         "tamasfe.even-better-toml",
         "vadimcn.vscode-lldb",

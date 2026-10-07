@@ -197,7 +197,7 @@ fn fault_catalog_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../config/catalog/battery_guardian.json")
+                .join("../../config/battery_guardian/guardian_diagnostics.json")
         })
 }
 
@@ -206,8 +206,8 @@ fn configuration_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../config")
-                .join("battery_guardian.yaml")
+                .join("../../config/battery_guardian")
+                .join("guardian_model.yaml")
         })
 }
 

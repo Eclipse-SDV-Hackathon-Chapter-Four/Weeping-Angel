@@ -96,3 +96,28 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Missing input is detectable without changing CAN, VSS, or uProtocol contracts.
 - ✅ The model is deterministic and unit-testable without Zenoh/uProtocol.
 - ❌ Receive-side staleness identifies the observed symptom only; it cannot distinguish transport delay/drop from source dropout.
+
+### ADR-005: Separate Guardian model, diagnostics, and injection ground truth (2026-10-07)
+
+**Context:**
+- The former `battery_guardian.yaml`, diagnostic catalog, and `battery_fault_contract.yaml` mixed or duplicated model parameters, diagnostic IDs, injected causes, and expected observations.
+- The existing Guardian-to-DFM reporter is working and must remain the sole reporting path.
+- A combination injection may produce zero, one, or multiple Guardian detections, so injected causes cannot be modeled as aliases for detection classes.
+
+**Decision:**
+- Canonical configuration lives under `product/config/battery_guardian/`: `guardian_model.yaml` parameterizes admissibility, `guardian_diagnostics.json` defines DFM representation, and `fault_injection_model.yaml` defines injection-side ground truth.
+- Guardian model semantics remain the combination of source code and `guardian_model.yaml`; the `DetectionClass` enum remains the detection vocabulary.
+- The existing DFM reporter consumes `guardian_diagnostics.json`. No second reporter or mapping mechanism is introduced.
+- Signal injections use canonical Guardian signal names and a uniform `mutations[]` representation. Single-signal classes require one mutation; `signal.combination` requires at least two distinct signals and forbids nested combinations.
+- Transport/source faults use actions rather than signal mutations. The Guardian never infers an injected class; the Fault Generator's execution record is authoritative for injection ground truth.
+
+**Alternatives Considered:**
+- Keep one combined contract containing classes, mappings, and model parameters → Rejected: duplicated semantics drifted from the actual reporter catalog and blurred cause versus observation.
+- Map every injected class to one expected Guardian detection → Rejected: root causes are receiver-side ambiguous and combination faults can produce multiple or no detections.
+- Replace the current DFM integration while renaming the catalog → Rejected: the reporter already implements the required detection-to-diagnostic path.
+
+**Consequences:**
+- ✅ Each artifact answers one question: admissibility, diagnostic representation, or deliberately injected cause.
+- ✅ Injection-model validation rejects malformed single-signal, combination, transport, and source definitions before a campaign runs.
+- ✅ The DFM reporting implementation and its catalog schema remain unchanged apart from the path rename.
+- ❌ The current repository still needs a concrete Fault Generator/ASC mutator to execute the new injection model; this refactoring defines and validates its contract only.
