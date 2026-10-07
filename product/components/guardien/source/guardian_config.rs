@@ -153,8 +153,14 @@ impl GuardianConfig {
                 "temperature.absolute_max_c - warning_margin_c must be greater than absolute_min_c"
             );
         }
+        if temperature.reference_c < temperature.absolute_min_c {
+            bail!("temperature.reference_c must not be less than absolute_min_c");
+        }
         if temperature.reference_c >= temperature.hot_state_c {
             bail!("temperature.reference_c must be less than hot_state_c");
+        }
+        if temperature.hot_state_c > temperature.absolute_max_c {
+            bail!("temperature.hot_state_c must not exceed absolute_max_c");
         }
 
         validate_thermal_limit("temperature.spread", &temperature.spread)?;
@@ -269,6 +275,49 @@ mod tests {
     fn derived_warning_threshold_must_exceed_absolute_minimum() {
         let yaml = CONFIG.replace("warning_margin_c: 10.0", "warning_margin_c: 100.0");
         assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn thermal_reference_must_not_be_below_absolute_minimum() {
+        let yaml = CONFIG.replace("reference_c: 20.0", "reference_c: -30.1");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn hot_state_must_not_exceed_absolute_maximum() {
+        let yaml = CONFIG.replace("hot_state_c: 70.0", "hot_state_c: 70.1");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn thermal_reference_must_be_below_hot_state() {
+        let yaml = CONFIG.replace("reference_c: 20.0", "reference_c: 70.0");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn thermal_state_envelope_boundaries_are_valid() {
+        let reference_at_minimum = CONFIG.replace("reference_c: 20.0", "reference_c: -30.0");
+        GuardianConfig::from_yaml_str(&reference_at_minimum)
+            .expect("reference equal to absolute minimum should be valid");
+
+        let hot_state_at_maximum = GuardianConfig::from_yaml_str(CONFIG)
+            .expect("hot state equal to absolute maximum should be valid");
+        assert_eq!(
+            hot_state_at_maximum.temperature.hot_state_c,
+            hot_state_at_maximum.temperature.absolute_max_c
+        );
+    }
+
+    #[test]
+    fn disabled_soc_coupling_still_requires_valid_parameters() {
+        assert!(CONFIG.contains("enabled: false"));
+
+        let negative_gain = CONFIG.replace("gain_c_per_pp: 0.25", "gain_c_per_pp: -0.1");
+        assert!(GuardianConfig::from_yaml_str(&negative_gain).is_err());
+
+        let zero_rate_cap = CONFIG.replace("rate_cap_pp_per_s: 2.0", "rate_cap_pp_per_s: 0.0");
+        assert!(GuardianConfig::from_yaml_str(&zero_rate_cap).is_err());
     }
 
     #[test]

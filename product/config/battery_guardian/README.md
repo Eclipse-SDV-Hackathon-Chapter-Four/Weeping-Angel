@@ -46,6 +46,11 @@ magnitudes for both values.
 Absolute temperature, ordering, SoC range/rate, stuck, and stale checks remain
 binary and produce `VIOLATION` only.
 
+The thermal normalization points are validated against the admissible
+envelope: `absolute_min_c <= reference_c < hot_state_c <= absolute_max_c`.
+SoC-coupling parameters must remain valid even when coupling is disabled, so a
+later enablement cannot expose a latent invalid configuration.
+
 ## DFM projection
 
 Guardian detections do not necessarily become DFM faults. The existing

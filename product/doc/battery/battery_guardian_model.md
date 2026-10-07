@@ -2,87 +2,102 @@
 
 ## 1. Scope
 
-The Guardian observes one sample every $\Delta t=100\,\mathrm{ms}$:
+The Guardian observes
 
 $$
-x_k =
-\left(
-T_{\min,k},
-T_{\mathrm{avg},k},
-T_{\max,k},
-SoC_k
-\right).
+x_k=(T_{\min,k},T_{\mathrm{avg},k},T_{\max,k},SoC_k)
 $$
 
-The VSS/DBC interface provides minimum, average and maximum cell temperature as well as the battery state of charge. The DBC quantization is $0.5\,^\circ\mathrm{C}$ for temperatures and $0.5$ percentage points for SoC; the message cycle time is $100\,\mathrm{ms}$.
+from the battery telemetry stream. The nominal VSS/DBC cycle is
 
-The Guardian does **not** estimate a detailed electro-thermal battery model. Instead, it checks a small set of closed-form physical consistency constraints. Each check compares an observed quantity ("IST") against a state-dependent admissible limit ("SOLL").
+$$
+\Delta t_{\mathrm{nom}}=100\,\mathrm{ms},
+$$
 
-The model is intentionally simple and campaign-oriented. The numeric values below are model parameters for the demonstrator, not battery-cell qualification limits for a specific chemistry.
+with temperature and SoC quantization of $0.5\,^\circ\mathrm C$ and $0.5$ percentage points.
+
+The Guardian is deliberately **not** a detailed electro-thermal battery model. It checks a compact set of closed-form consistency constraints. Numeric values below are demonstrator parameters, not qualification limits for a particular battery chemistry.
+
+For temporal checks, the model uses the **actual elapsed receive time**
+
+$$
+\Delta t_k=t^{recv}_k-t^{recv}_{k-1},
+$$
+
+not the nominal 100-ms period.
 
 ---
 
-## 2. Configuration parameters
+## 2. Configuration
 
-### 2.1 Sampling and transport
+### 2.1 Timing and warning policy
 
-| Parameter | Symbol | Proposed value | Unit | Meaning |
-|---|---:|---:|---|---|
-| Sample period | $\Delta t$ | 0.1 | s | VSS/DBC sampling interval |
-| Temperature quantization | $q_T$ | 0.5 | °C | DBC resolution |
-| SoC quantization | $q_{SoC}$ | 0.5 | pp | DBC resolution |
-| Stale timeout | $\tau_{\mathrm{stale}}$ | 0.5 | s | No fresh sample beyond this age |
-| Evaluation/watchdog interval | $\tau_{\mathrm{watchdog}}$ | 0.1 | s | Stream freshness and model evaluation interval |
+| Parameter | Value | Meaning |
+|---|---:|---|
+| nominal sample period | 100 ms | expected VSS/DBC cycle |
+| evaluation period | 100 ms | Guardian task period |
+| stale timeout $\tau_{\mathrm{stale}}$ | 500 ms | maximum age of the last valid sample |
+| utilization warning threshold $u_{\mathrm{warning}}$ | 0.8 | warning fraction for continuous limits |
 
-Here and below, `pp` means percentage points.
-
-### 2.2 Absolute state limits
-
-| Parameter | Symbol | Proposed value | Unit |
-|---|---:|---:|---|
-| Absolute minimum battery temperature | $T_{\mathrm{abs,min}}$ | -30 | °C |
-| Absolute maximum battery temperature | $T_{\mathrm{abs,max}}$ | 70 | °C |
-| Minimum SoC | $SoC_{\min}$ | 0 | % |
-| Maximum SoC | $SoC_{\max}$ | 100 | % |
-
-#### Thermal-limit levels
-
-The critical threshold is the configured absolute maximum. The warning
-threshold is derived from a positive margin:
+For a continuous upper bound,
 
 $$
-T_{\mathrm{critical}}=T_{\mathrm{abs,max}},\qquad
+u=\frac{\mathrm{observed}}{\mathrm{limit}},
+\qquad
+r=\mathrm{observed}-\mathrm{limit}.
+$$
+
+Classification:
+
+$$
+u<0.8:\ \text{no detection},\qquad
+0.8\le u\le1:\ \texttt{WARNING},\qquad
+u>1:\ \texttt{VIOLATION}.
+$$
+
+A warning may therefore have $r\le0$.
+
+### 2.2 Temperature envelope
+
+| Parameter | Symbol | Value |
+|---|---:|---:|
+| absolute minimum | $T_{\mathrm{abs,min}}$ | $-30\,^\circ\mathrm C$ |
+| absolute maximum | $T_{\mathrm{abs,max}}$ | $70\,^\circ\mathrm C$ |
+| warning margin | $M_{\mathrm{warning}}$ | $10\,^\circ\mathrm C$ |
+| reference temperature | $T_{\mathrm{ref}}$ | $20\,^\circ\mathrm C$ |
+| hot-state temperature | $T_{\mathrm{hot}}$ | $70\,^\circ\mathrm C$ |
+
+The operating thresholds are derived:
+
+$$
+T_{\mathrm{critical}}=T_{\mathrm{abs,max}},
+\qquad
 T_{\mathrm{warning}}=T_{\mathrm{abs,max}}-M_{\mathrm{warning}}.
 $$
 
-For $T_{\mathrm{abs,max}}=70\,^{\circ}\mathrm C$ and
-$M_{\mathrm{warning}}=10\,^{\circ}\mathrm C$:
+Hence:
 
-| State | Condition |
-|---|---|
-| Normal | $T_{\max}<60\,^{\circ}\mathrm C$ |
-| `THERMAL_LIMIT / WARNING` | $60\le T_{\max}<70\,^{\circ}\mathrm C$ |
-| `THERMAL_LIMIT / CRITICAL` | $T_{\max}\ge70\,^{\circ}\mathrm C$ |
+- $T_\max<60^\circ\mathrm C$: no thermal-limit detection
+- $60\le T_\max<70^\circ\mathrm C$: `THERMAL_LIMIT / WARNING`
+- $T_\max\ge70^\circ\mathrm C$: `THERMAL_LIMIT / CRITICAL`
 
-Warning and critical are mutually exclusive. The critical threshold may equal
-the absolute maximum: at exactly $70\,^{\circ}\mathrm C$ the state is critical
-but still inside the admissible envelope; only values above the maximum raise
-`PHYSICAL_TEMP_ABSOLUTE_LIMIT` as well.
+At exactly $70^\circ\mathrm C$, the state is critical but still inside the absolute envelope. `PHYSICAL_TEMP_ABSOLUTE_LIMIT` starts only above $70^\circ\mathrm C$.
 
-#### Generic continuous-bound warning threshold
-
-Spread, hotspot, and temperature-rate checks use the global configured
-warning fraction $u_{\mathrm{warning}}=0.8$. With
-$u=\mathrm{observed}/\mathrm{limit}$, they produce no detection below the
-fraction, `WARNING` for $u_{\mathrm{warning}}\le u\le1$, and `VIOLATION` for
-$u>1$. Cooling uses the positive magnitude $-dT/dt$ as its observed value.
-
-### 2.3 Thermal state normalization
-
-The temperature-dependent limits use a normalized thermal state
+Configuration invariant:
 
 $$
-\theta(T) =
+T_{\mathrm{abs,min}}
+\le T_{\mathrm{ref}}
+< T_{\mathrm{hot}}
+\le T_{\mathrm{abs,max}}.
+$$
+
+### 2.3 Temperature-dependent limits
+
+Normalize the thermal state as
+
+$$
+\theta(T)=
 \operatorname{clip}
 \left(
 \frac{T-T_{\mathrm{ref}}}
@@ -91,741 +106,298 @@ $$
 \right).
 $$
 
-Parameters:
-
-| Parameter | Symbol | Proposed value | Unit |
-|---|---:|---:|---|
-| Reference temperature | $T_{\mathrm{ref}}$ | 20 | °C |
-| Hot-state temperature | $T_{\mathrm{hot}}$ | 70 | °C |
-
-Thus,
+With the current parameters,
 
 $$
-\theta(T)=
-\begin{cases}
-0, & T\le20^\circ\mathrm{C},\\[2mm]
-\dfrac{T-20}{50}, & 20<T<70^\circ\mathrm{C},\\[3mm]
-1, & T\ge70^\circ\mathrm{C}.
-\end{cases}
+S(T)=12-5\theta(T)
 $$
 
-The state variable is deliberately saturated. Temperatures outside the physical range are handled independently by the absolute-limit check.
-
-### 2.4 Spatial consistency parameters
-
-| Parameter | Symbol | Cold value | Hot value | Unit |
-|---|---:|---:|---:|---|
-| Maximum pack spread | $S$ | $S_{\mathrm{cold}}=12$ | $S_{\mathrm{hot}}=7$ | °C |
-| Maximum hotspot deviation | $H$ | $H_{\mathrm{cold}}=5$ | $H_{\mathrm{hot}}=2$ | °C |
-
-### 2.5 Dynamic consistency parameters
-
-| Parameter | Symbol | Proposed value | Unit |
-|---|---:|---:|---|
-| Maximum heating rate, cold state | $R_{\uparrow,\mathrm{cold}}$ | 8 | °C/s |
-| Maximum heating rate, hot state | $R_{\uparrow,\mathrm{hot}}$ | 5 | °C/s |
-| Maximum cooling magnitude | $R_{\downarrow}$ | 6 | °C/s |
-| SoC-to-heating coupling | $K_{SoC}$ | 0.25 | °C/pp |
-| SoC-rate coupling cap | $Q_{\mathrm{cap}}$ | 2 | pp/s |
-| Maximum SoC step | $\Delta SoC_{\max}$ | 0.5 | pp/sample |
-
-The SoC coupling is intentionally weak and capped. It is optional; setting
+is the maximum max-min spread and
 
 $$
-K_{SoC}=0
+H(T)=5-3\theta(T)
 $$
 
-reduces the v1 model to a temperature-only dynamic bound without changing any other formula.
+the maximum max-average hotspot deviation.
 
-### 2.6 Stuck detection parameters
+![Temperature-dependent spatial limits](guardian_spatial_limits_revised.png)
 
-A raw rule such as "five identical samples" is not suitable because the temperature signals are quantized to $0.5\,^\circ\mathrm C$ and a healthy battery can legitimately remain unchanged over many 100-ms samples.
+Dynamic parameters:
 
-Instead, stuck detection uses a window and requires excitation elsewhere:
+| Parameter | Value |
+|---|---:|
+| heating limit, cold/reference state | $8\,^\circ\mathrm C/s$ |
+| heating limit, hot state | $5\,^\circ\mathrm C/s$ |
+| cooling magnitude limit | $6\,^\circ\mathrm C/s$ |
+| optional SoC coupling gain | $0.25\,^\circ\mathrm C/\mathrm{pp}$ |
+| optional SoC-rate cap | $2\,\mathrm{pp/s}$ |
 
-| Parameter | Symbol | Proposed value | Meaning |
-|---|---:|---:|---|
-| Window length | $N_{\mathrm{stuck}}$ | 10 samples | 1 s observation window |
-| Flatness tolerance | $\epsilon_{\mathrm{stuck}}$ | 0.25 °C | below half one temperature LSB |
-| Temperature excitation | $E_T$ | 1.0 °C | another temperature channel changes sufficiently |
-| SoC excitation | $E_{SoC}$ | 1.0 pp | SoC changes sufficiently |
+The SoC coupling is **disabled by default**. Gain and cap remain configured so the feature can be enabled without changing the model definition.
 
-This detector is intended primarily for the controlled fault campaign. Without independent excitation or source metadata, a constant physical signal and a frozen sensor cannot always be distinguished.
+### 2.4 SoC
+
+| Parameter | Value |
+|---|---:|
+| minimum | 0 % |
+| maximum | 100 % |
+| maximum absolute rate | 5 pp/s |
+
+Using a rate rather than a fixed per-received-sample step avoids false detections after delay or packet loss.
+
+### 2.5 Stuck detection
+
+| Parameter | Value |
+|---|---:|
+| window length $N$ | 10 samples |
+| flatness tolerance $\epsilon$ | $0.25^\circ\mathrm C$ |
+| temperature excitation $E_T$ | $1.0^\circ\mathrm C$ |
+| SoC excitation $E_{SoC}$ | 1.0 pp |
+
+Stuck detection applies only to `temp_min`, `temp_avg`, and `temp_max`. SoC is an excitation source, not a stuck target.
 
 ---
 
-## 3. Generic SOLL-IST formulation
+## 3. Detection semantics
 
-For every invariant, define
-
-$$
-r_k = \mathrm{IST}_k-\mathrm{SOLL}_k.
-$$
-
-A positive residual indicates that a model limit is exceeded:
-
-$$
-\boxed{r_k>0 \quad\Longrightarrow\quad \text{violation}}
-$$
-
-where appropriate, the residual is formed from the maximum of multiple one-sided violations.
-
-For continuous upper bounds, also define utilization
-
-$$
-u_k=\frac{\mathrm{IST}_k}{\mathrm{SOLL}_k}.
-$$
-
-This permits a warning before the residual becomes positive. Every Guardian
-observation is represented as `DetectionClass × DetectionLevel`: the class
-identifies the reacting rule and the level is `Warning`, `Violation`, or
-`Critical`. This convention allows the Guardian to report generic evidence
-fields:
-
-- `observed`: the actual measured quantity,
-- `limit`: the state-dependent admissible limit,
-- `residual`: `observed - limit`,
-- `utilization`: `observed / limit` where meaningful,
-- `detection_class`: the reacting invariant,
-- `detection_level`: its classification.
-
-Absolute temperature, ordering, SoC range/rate, stuck, and stale checks remain
-binary and use `VIOLATION` only.
-
----
-
-## 4. Physical consistency checks
-
-### 4.1 Absolute temperature limit
-
-Required condition:
-
-$$
-T_{\mathrm{abs,min}}
-\le T_{\min,k}
-\le T_{\max,k}
-\le T_{\mathrm{abs,max}}.
-$$
-
-Residual:
-
-$$
-r_{\mathrm{abs},k}
-=
-\max
-\left(
-T_{\mathrm{abs,min}}-T_{\min,k},
-T_{\max,k}-T_{\mathrm{abs,max}}
-\right).
-$$
-
-Fault condition:
-
-$$
-r_{\mathrm{abs},k}>0.
-$$
-
-Guardian detection class:
+A Guardian observation is
 
 ```text
+DetectionClass × DetectionLevel
+```
+
+Canonical classes:
+
+```text
+STREAM_STALE
+THERMAL_LIMIT
 PHYSICAL_TEMP_ABSOLUTE_LIMIT
-```
-
----
-
-### 4.2 Temperature ordering
-
-Required condition:
-
-$$
-T_{\min,k}
-\le
-T_{\mathrm{avg},k}
-\le
-T_{\max,k}.
-$$
-
-Residual:
-
-$$
-r_{\mathrm{ordering},k}
-=
-\max
-\left(
-T_{\min,k}-T_{\mathrm{avg},k},
-T_{\mathrm{avg},k}-T_{\max,k}
-\right).
-$$
-
-Fault condition:
-
-$$
-r_{\mathrm{ordering},k}>0.
-$$
-
-Guardian detection class:
-
-```text
 PHYSICAL_TEMP_ORDERING
-```
-
----
-
-### 4.3 Temperature spread across the pack
-
-The admissible maximum spread shrinks as the pack becomes hotter:
-
-$$
-S(T)
-=
-S_{\mathrm{cold}}
--
-\left(
-S_{\mathrm{cold}}-S_{\mathrm{hot}}
-\right)
-\theta(T).
-$$
-
-With the proposed parameters:
-
-$$
-\boxed{
-S(T)
-=
-12-5\,\theta(T)
-}
-$$
-
-in degrees Celsius.
-
-Observed spread:
-
-$$
-S_{\mathrm{obs},k}
-=
-T_{\max,k}-T_{\min,k}.
-$$
-
-Residual:
-
-$$
-r_{\mathrm{spread},k}
-=
-S_{\mathrm{obs},k}
--
-S(T_{\mathrm{avg},k}).
-$$
-
-Utilization and level:
-
-$$
-u_{\mathrm{spread},k}
-=
-\frac{S_{\mathrm{obs},k}}{S(T_{\mathrm{avg},k})}.
-$$
-
-This yields no detection below 0.8, `WARNING` from 0.8 through 1.0,
-and `VIOLATION` above 1.0.
-
-Guardian detection class:
-
-```text
 PHYSICAL_TEMP_SPREAD
+PHYSICAL_TEMP_HOTSPOT
+PHYSICAL_TEMP_RATE
+PHYSICAL_SOC_RANGE
+PHYSICAL_SOC_RATE
+SIGNAL_STUCK
 ```
 
-![Temperature-dependent spatial limits](guardian_spatial_limits.png)
+`WARNING` is used for `THERMAL_LIMIT`, spread, hotspot, and temperature rate. `CRITICAL` is used only for `THERMAL_LIMIT`. All remaining checks are binary and report `VIOLATION`.
 
 ---
 
-### 4.4 Hotspot deviation from the pack average
+## 4. Static and spatial temperature checks
 
-The hottest cell may only deviate by a state-dependent amount from the pack average:
+### Absolute envelope
 
-$$
-H(T)
-=
-H_{\mathrm{cold}}
--
-\left(
-H_{\mathrm{cold}}-H_{\mathrm{hot}}
-\right)
-\theta(T).
-$$
-
-With the proposed parameters:
+Check independently:
 
 $$
-\boxed{
-H(T)
-=
-5-3\,\theta(T)
-}
+T_\min\ge T_{\mathrm{abs,min}},
+\qquad
+T_\max\le T_{\mathrm{abs,max}}.
 $$
 
-in degrees Celsius.
+A strict exceedance raises `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION`.
 
-Observed hotspot deviation:
+### Ordering
 
-$$
-H_{\mathrm{obs},k}
-=
-T_{\max,k}-T_{\mathrm{avg},k}.
-$$
-
-Residual:
+Require
 
 $$
-r_{\mathrm{hotspot},k}
-=
-H_{\mathrm{obs},k}
--
-H(T_{\mathrm{avg},k}).
+T_\min\le T_{\mathrm{avg}}\le T_\max.
 $$
 
-Utilization and level:
+Violation raises `PHYSICAL_TEMP_ORDERING / VIOLATION`.
+
+### Spread
 
 $$
-u_{\mathrm{hotspot},k}
-=
-\frac{H_{\mathrm{obs},k}}{H(T_{\mathrm{avg},k})}.
+S_{\mathrm{obs}}=T_\max-T_\min,
+\qquad
+S_{\mathrm{lim}}=S(T_{\mathrm{avg}}).
 $$
 
-This yields no detection below 0.8, `WARNING` from 0.8 through 1.0,
-and `VIOLATION` above 1.0.
+$$
+u_S=\frac{S_{\mathrm{obs}}}{S_{\mathrm{lim}}},
+\qquad
+r_S=S_{\mathrm{obs}}-S_{\mathrm{lim}}.
+$$
 
-Guardian detection class:
+Class: `PHYSICAL_TEMP_SPREAD`.
 
-```text
-PHYSICAL_TEMP_HOTSPOT
-```
+### Hotspot
 
-The spread and hotspot checks are intentionally separate:
+$$
+H_{\mathrm{obs}}=T_\max-T_{\mathrm{avg}},
+\qquad
+H_{\mathrm{lim}}=H(T_{\mathrm{avg}}).
+$$
 
-- `SPREAD` detects excessive non-uniformity over the complete pack.
-- `HOTSPOT` detects the hottest cell diverging from the thermal bulk of the pack.
+$$
+u_H=\frac{H_{\mathrm{obs}}}{H_{\mathrm{lim}}},
+\qquad
+r_H=H_{\mathrm{obs}}-H_{\mathrm{lim}}.
+$$
+
+Class: `PHYSICAL_TEMP_HOTSPOT`.
+
+Spread and hotspot are separate by design: spread measures pack-wide non-uniformity; hotspot measures divergence of the hottest cell from the thermal bulk.
 
 ---
 
 ## 5. Dynamic temperature consistency
 
-### 5.1 Measured temperature rate
-
-For each temperature signal
-
-$$
-i\in\{\min,\mathrm{avg},\max\},
-$$
-
-compute
+For each $i\in\{\min,\mathrm{avg},\max\}$,
 
 $$
 \dot T_{i,k}
 =
-\frac{T_{i,k}-T_{i,k-1}}{\Delta t}.
+\frac{T_{i,k}-T_{i,k-1}}{\Delta t_k}.
 $$
 
-For the state-dependent limit, the **previous** average temperature is used:
+Use the **previous** average temperature for the state-dependent heating limit:
 
 $$
-T_{\mathrm{state},k}=T_{\mathrm{avg},k-1}.
-$$
-
-This keeps the check causal and prevents the current anomalous sample from relaxing its own limit.
-
-### 5.2 Base heating limit
-
-$$
-R_{\uparrow,\mathrm{base}}(T)
+R_{\uparrow,\mathrm{base}}
 =
-R_{\uparrow,\mathrm{cold}}
--
-\left(
-R_{\uparrow,\mathrm{cold}}
--
-R_{\uparrow,\mathrm{hot}}
-\right)
-\theta(T).
+8-3\theta(T_{\mathrm{avg},k-1})
+\quad [^\circ\mathrm C/s].
 $$
 
-With the proposed parameters:
+If SoC coupling is disabled,
 
 $$
-\boxed{
-R_{\uparrow,\mathrm{base}}(T)
-=
-8-3\,\theta(T)
-}
-\quad [^\circ\mathrm C/\mathrm s].
+R_\uparrow=R_{\uparrow,\mathrm{base}}.
 $$
 
-### 5.3 Optional SoC-dependent widening
-
-The instantaneous SoC rate is
+If enabled,
 
 $$
-\dot{SoC}_k
-=
-\frac{SoC_k-SoC_{k-1}}{\Delta t}.
+\dot{SoC}_k=
+\frac{SoC_k-SoC_{k-1}}{\Delta t_k},
+\qquad
+Q_k=\min(|\dot{SoC}_k|,2),
 $$
 
-For the thermal coupling, use a capped absolute value
-
 $$
-Q_k
-=
-\min
-\left(
-|\dot{SoC}_k|,
-Q_{\mathrm{cap}}
-\right).
-$$
-
-Then
-
-$$
-\boxed{
-R_\uparrow(T,Q)
-=
-R_{\uparrow,\mathrm{base}}(T)
-+
-K_{SoC}Q
-}
-$$
-
-or numerically
-
-$$
-\boxed{
-R_\uparrow(T,Q)
-=
-8-3\theta(T)+0.25Q
-}.
-$$
-
-This is not intended as a detailed electro-thermal model. It only expresses the weak assumption that substantial charging/discharging may justify a somewhat larger positive temperature gradient.
-
-The cap ensures that a corrupted SoC signal cannot arbitrarily relax the temperature plausibility bound.
-
-### 5.4 Cooling limit
-
-Cooling is bounded independently:
-
-$$
-\boxed{
--R_\downarrow
-\le
-\dot T_{i,k}
-}
-$$
-
-with
-
-$$
-R_\downarrow=6\,^\circ\mathrm C/\mathrm s.
-$$
-
-### 5.5 Complete dynamic condition
-
-For every $i\in\{\min,\mathrm{avg},\max\}$:
-
-$$
-\boxed{
--R_\downarrow
-\le
-\dot T_{i,k}
-\le
 R_\uparrow
-\left(
-T_{\mathrm{avg},k-1},
-Q_k
-\right)
-}
+=
+R_{\uparrow,\mathrm{base}}
++0.25Q_k.
 $$
 
-For each channel and direction, use positive magnitudes:
+For each temperature channel use
 
 $$
 (\mathrm{observed},\mathrm{limit})=
 \begin{cases}
-(\dot T_{i,k}, R_\uparrow), & \dot T_{i,k}\ge0,\\
-(-\dot T_{i,k}, R_\downarrow), & \dot T_{i,k}<0.
+(\dot T_i,R_\uparrow), & \dot T_i\ge0,\\
+(-\dot T_i,6), & \dot T_i<0.
 \end{cases}
 $$
 
-Then $u_{\mathrm{rate},i,k}=\mathrm{observed}/\mathrm{limit}$ and
-$r_{\mathrm{rate},i,k}=\mathrm{observed}-\mathrm{limit}$. Each channel is
-classified independently: no detection below 0.8, `WARNING` from 0.8 through
-1.0, and `VIOLATION` above 1.0.
+and classify $u_R=\mathrm{observed}/\mathrm{limit}$ with the generic 0.8/1.0 policy.
 
-Equivalently, the one-sided violation residual can be written as
+Class: `PHYSICAL_TEMP_RATE`.
 
-$$
-r_{\mathrm{rate},i,k}
-=
-\max
-\left(
-\dot T_{i,k}-R_\uparrow,
--\dot T_{i,k}-R_\downarrow
-\right).
-$$
+For the nominal 100-ms cycle the base positive step limit is 0.8 °C at the reference state and 0.5 °C at the hot state. This is illustrative only; runtime evaluation uses the actual $\Delta t_k$.
 
-The aggregate residual is
+![Nominal 100-ms base heating step](guardian_heating_step_limit_revised.png)
 
-$$
-r_{\mathrm{rate},k}
-=
-\max_i
-r_{\mathrm{rate},i,k}.
-$$
+The optional coupling is:
 
-Guardian detection class:
-
-```text
-PHYSICAL_TEMP_RATE
-```
-
-For a fixed 100-ms sample period, the positive per-sample bound is
-
-$$
-\Delta T_{\uparrow,\max}
-=
-\Delta t\cdot R_\uparrow.
-$$
-
-![Maximum positive temperature step per sample](guardian_heating_step_limit.png)
-
-The proposed temperature-only base limit therefore decreases from
-
-$$
-0.8\,^\circ\mathrm C/\text{sample}
-$$
-
-at the cold/reference state to
-
-$$
-0.5\,^\circ\mathrm C/\text{sample}
-$$
-
-at the hot state.
-
-The weak SoC coupling is shown separately:
-
-![SoC-dependent heating-rate coupling](guardian_soc_rate_coupling.png)
+![Optional SoC-to-heating coupling](guardian_soc_rate_coupling_revised.png)
 
 ---
 
-## 6. State-of-charge consistency
+## 6. SoC consistency
 
-### 6.1 SoC range
+### Range
 
-Required condition:
-
-$$
-SoC_{\min}
-\le SoC_k
-\le SoC_{\max}
-$$
-
-with
+Require
 
 $$
-SoC_{\min}=0,\qquad SoC_{\max}=100.
+0\le SoC_k\le100.
 $$
 
-Residual:
+Violation raises `PHYSICAL_SOC_RANGE / VIOLATION`.
+
+### Rate
+
+For consecutive **received** samples,
 
 $$
-r_{\mathrm{soc-range},k}
-=
-\max
-\left(
-SoC_{\min}-SoC_k,
-SoC_k-SoC_{\max}
-\right).
+\dot{SoC}_k=
+\frac{SoC_k-SoC_{k-1}}{\Delta t_k}.
 $$
 
-Fault condition:
+Require
 
 $$
-r_{\mathrm{soc-range},k}>0.
+|\dot{SoC}_k|\le5\,\mathrm{pp/s},
 $$
 
-Guardian detection class:
-
-```text
-PHYSICAL_SOC_RANGE
-```
-
-### 6.2 SoC step/rate
-
-Because the DBC quantization is $0.5$ percentage points, the v1 model uses a per-sample step bound:
+equivalently
 
 $$
-\Delta SoC_k
-=
-SoC_k-SoC_{k-1}.
+|SoC_k-SoC_{k-1}|
+\le5\,\Delta t_k.
 $$
 
-Required condition:
-
-$$
-\boxed{
-|\Delta SoC_k|
-\le
-\Delta SoC_{\max}
-}
-$$
-
-with
-
-$$
-\Delta SoC_{\max}=0.5\ \text{pp/sample}.
-$$
-
-Residual:
-
-$$
-r_{\mathrm{soc-rate},k}
-=
-|\Delta SoC_k|
--
-\Delta SoC_{\max}.
-$$
-
-Fault condition:
-
-$$
-r_{\mathrm{soc-rate},k}>0.
-$$
-
-Guardian detection class:
-
-```text
-PHYSICAL_SOC_RATE
-```
-
-Equivalently, for $\Delta t=0.1\,\mathrm s$,
-
-$$
-|\dot{SoC}_k|
-\le
-5\ \text{pp/s}.
-$$
-
-The per-sample formulation is preferable here because it directly reflects the signal quantization.
+Violation raises `PHYSICAL_SOC_RATE / VIOLATION`. The first sample has no temporal checks.
 
 ---
 
-## 7. Signal-stuck detection
+## 7. Stuck detection
 
-For one signal $x$ over the last $N_{\mathrm{stuck}}$ samples, define the observed range
-
-$$
-A_x(k)
-=
-\max_{j=k-N+1,\ldots,k}x_j
--
-\min_{j=k-N+1,\ldots,k}x_j.
-$$
-
-The signal is locally flat if
+For each temperature channel over the last $N$ samples,
 
 $$
-A_x(k)\le\epsilon_{\mathrm{stuck}}.
+A_i=\max(T_i)-\min(T_i),
 $$
 
-For a temperature signal $T_i$, define external excitation as
+and for SoC over the same window,
 
 $$
-E_i(k)
-=
-\left[
-\max_{j\ne i} A_{T_j}(k)\ge E_T
-\right]
-\lor
-\left[
-|SoC_k-SoC_{k-N+1}|\ge E_{SoC}
-\right].
+A_{SoC}=\max(SoC)-\min(SoC).
 $$
 
-Then
+A temperature signal is stuck iff
 
 $$
-\boxed{
-\mathrm{stuck}_i(k)
-=
-\left[
-A_{T_i}(k)\le\epsilon_{\mathrm{stuck}}
-\right]
-\land
-E_i(k)
-}
+A_i\le\epsilon
 $$
 
-with proposed values
+and there is independent excitation:
 
 $$
-N_{\mathrm{stuck}}=10,\qquad
-\epsilon_{\mathrm{stuck}}=0.25^\circ\mathrm C,\qquad
-E_T=1.0^\circ\mathrm C,\qquad
-E_{SoC}=1.0\ \mathrm{pp}.
+\max_{j\ne i}A_j\ge E_T
+\quad\lor\quad
+A_{SoC}\ge E_{SoC}.
 $$
 
-Guardian detection class:
-
-```text
-SIGNAL_STUCK
-```
-
-This deliberately avoids classifying a thermally steady battery as faulty merely because the same quantized temperature value is observed repeatedly.
+A positive result raises `SIGNAL_STUCK / VIOLATION`.
 
 ---
 
-## 8. Stream freshness
+## 8. Stream freshness and evaluation
 
-Let $t_{\mathrm{last}}$ be the receive time of the most recent fresh battery event.
-
-Stream age:
+Let $t_{\mathrm{last}}$ be the receive time of the last valid sample:
 
 $$
-a(t)
-=
-t-t_{\mathrm{last}}.
+a(t)=t-t_{\mathrm{last}}.
 $$
 
-Required condition:
+If
 
 $$
-a(t)\le\tau_{\mathrm{stale}}.
+a(t)>0.5\,s,
 $$
 
-Residual:
+raise `STREAM_STALE / VIOLATION`.
 
-$$
-r_{\mathrm{stale}}(t)
-=
-a(t)-\tau_{\mathrm{stale}}.
-$$
+Freshness is checked periodically even without new input. Each received sample is physically evaluated at most once; the previous evaluated sample is retained for temporal checks.
 
-Fault condition:
-
-$$
-r_{\mathrm{stale}}(t)>0.
-$$
-
-With
-
-$$
-\tau_{\mathrm{stale}}=0.5\,\mathrm s.
-$$
-
-Guardian detection class:
-
-```text
-STREAM_STALE
-```
-
-This is intentionally a **symptom** classification. In the current campaign, the following injected root causes may all lead to the same Guardian observation:
+The Guardian observes only the symptom:
 
 ```text
 transport.delay  --\
@@ -833,149 +405,58 @@ transport.drop   ---+--> STREAM_STALE
 source.dropout   --/
 ```
 
-The Evidence Collector must therefore use campaign ground truth to distinguish the injected class.
+It does not infer the injected root cause.
 
 ---
 
-## 9. Complete per-sample Guardian evaluation
+## 9. Evaluation order
 
-For each new sample $k$:
+For each new valid sample:
 
-1. Decode
-   $$
-   T_{\min,k},T_{\mathrm{avg},k},T_{\max,k},SoC_k.
-   $$
+1. classify `THERMAL_LIMIT`;
+2. check absolute bounds and ordering;
+3. evaluate spread and hotspot;
+4. if a previous sample exists, evaluate temperature and SoC rates using actual $\Delta t_k$;
+5. update and evaluate the stuck window;
+6. emit detection state transitions and project configured class/level pairs to DFM.
 
-2. Classify `THERMAL_LIMIT` from $T_{\max,k}$ using the derived warning and
-   critical thresholds.
-
-3. Check absolute temperature bounds:
-   $$
-   r_{\mathrm{abs},k}.
-   $$
-
-4. Check ordering:
-   $$
-   r_{\mathrm{ordering},k}.
-   $$
-
-5. Compute thermal state:
-   $$
-   \theta_k=\theta(T_{\mathrm{avg},k}).
-   $$
-
-6. Compute spatial limits:
-   $$
-   S_k=S(T_{\mathrm{avg},k}),\qquad
-   H_k=H(T_{\mathrm{avg},k}).
-   $$
-
-7. Compare spatial IST values and classify their utilization:
-   $$
-   T_{\max,k}-T_{\min,k}
-   \quad\text{and}\quad
-   T_{\max,k}-T_{\mathrm{avg},k}
-   $$
-   against $S_k$ and $H_k$.
-
-8. If a previous sample exists, compute:
-   $$
-   \dot T_{\min,k},\dot T_{\mathrm{avg},k},\dot T_{\max,k},
-   \dot{SoC}_k.
-   $$
-
-9. Compute the dynamic heating limit from the previous thermal state:
-   $$
-   R_{\uparrow,k}
-   =
-   R_\uparrow(T_{\mathrm{avg},k-1},Q_k).
-   $$
-
-10. Classify temperature-rate utilization and check the binary SoC step.
-
-11. Update the stuck-detection windows.
-
-12. On every detection transition, emit a `GuardianEvidenceEvent`; project it
-    to DFM only when a class/level mapping exists.
-
-Separately, the watchdog evaluates stream freshness even when no new sample arrives.
+Malformed messages do not update model state or freshness.
 
 ---
 
-## 10. Recommended Guardian evidence payload
+## 10. Evidence and injection semantics
 
-For every state transition, the Guardian should expose enough data for the Evidence Collector to reproduce the SOLL-IST decision:
+For continuous checks, evidence should expose at least:
 
 ```yaml
-run_id: ...
 detection_class: PHYSICAL_TEMP_SPREAD
 detection_level: VIOLATION
-fault_id: BatteryTempSpread
-state: active
-detected_at_ms: ...
-
-context:
-  temp_min: 42.0
-  temp_avg: 47.0
-  temp_max: 55.0
-  soc: 68.5
-
-  observed: 13.0
-  limit: 9.3
-  residual: 3.7
-  utilization: 1.398
-
-  model_variable: "temp_max-temp_min"
-  state_variable: 47.0
+observed: 13.0
+limit: 9.3
+residual: 3.7
+utilization: 1.398
 ```
 
-For a dynamic violation, the context should additionally include the previous sample or derived rate:
+Temporal evidence should additionally include the affected signal and actual $\Delta t_k$.
 
-```yaml
-context:
-  signal: temp_max
-  previous: 48.0
-  current: 49.0
-  delta_t_s: 0.1
-  observed: 10.0       # degC/s
-  limit: 6.5           # degC/s
-  residual: 3.5
-  utilization: 1.538
-```
+Injected faults are causes; Guardian detections are observations:
 
-The Collector should not need to reimplement the physical model to decide
-whether the Guardian detected an observation. It should receive `observed`,
-`limit`, `residual`, and utilization where meaningful so that the decision is
-auditable. `fault_id` is optional because only configured class/level pairs
-are projected to DFM; continuous-bound warnings intentionally remain internal.
-
----
-
-## 11. Illustrative observations in the current fault campaign
-
-This table documents intended campaign examples. It is not a diagnostic
-mapping and does not allow the Guardian to infer an injected root cause.
-
-| Injected class | Primary Guardian observation |
+| Injection | Typical observation |
 |---|---|
-| `signal.stuck` | `SIGNAL_STUCK / VIOLATION` |
-| `signal.spike` | `PHYSICAL_TEMP_RATE / WARNING`, later possibly `/ VIOLATION` |
-| `signal.drift` | `PHYSICAL_TEMP_SPREAD / WARNING`, `PHYSICAL_TEMP_HOTSPOT / WARNING`, later possibly violations |
-| `signal.out_of_range` | `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION` |
-| `transport.delay` | `STREAM_STALE / VIOLATION` |
-| `transport.drop` | `STREAM_STALE / VIOLATION` |
-| `source.dropout` | `STREAM_STALE / VIOLATION` |
-| `signal.combination` | Zero, one, or multiple detection classes, depending on its component mutations |
+| temperature `signal.spike` | `PHYSICAL_TEMP_RATE` |
+| SoC `signal.spike` | `PHYSICAL_SOC_RATE` |
+| temperature `signal.drift` | `PHYSICAL_TEMP_SPREAD` and/or `PHYSICAL_TEMP_HOTSPOT` |
+| temperature `signal.out_of_range` | `PHYSICAL_TEMP_ABSOLUTE_LIMIT` |
+| SoC `signal.out_of_range` | `PHYSICAL_SOC_RANGE` |
+| temperature `signal.stuck` | `SIGNAL_STUCK` |
+| `transport.delay/drop`, `source.dropout` | `STREAM_STALE` |
+| `signal.combination` | zero, one, or multiple detections |
 
-A spike may legitimately violate more than one physical invariant. `PHYSICAL_TEMP_RATE` is the intended primary observation for the campaign scenario; the injected spike should therefore remain inside the absolute temperature range when possible.
-
-Likewise, the drift scenario should remain within the per-sample rate limit and gradually violate the spread/hotspot constraints. This isolates the intended fault mechanism.
+The Guardian must never infer the injected class.
 
 ---
 
-## 12. Compact parameter block
-
-A direct implementation-oriented configuration could look like:
+## 11. Compact configuration
 
 ```yaml
 guardian:
@@ -1005,7 +486,6 @@ guardian:
         cold: 8.0
         hot: 5.0
       cooling_rate_c_per_s: 6.0
-
       soc_coupling:
         enabled: false
         gain_c_per_pp: 0.25
@@ -1014,7 +494,7 @@ guardian:
   soc:
     min_percent: 0.0
     max_percent: 100.0
-    max_step_pp: 0.5
+    max_rate_pp_per_s: 5.0
 
   stuck:
     enabled: true
@@ -1023,11 +503,3 @@ guardian:
     temperature_excitation_c: 1.0
     soc_excitation_pp: 1.0
 ```
-
-For the simplest possible first implementation, the SoC-to-temperature coupling can be disabled with
-
-```yaml
-gain_c_per_pp: 0.0
-```
-
-without changing the remainder of the Guardian model.

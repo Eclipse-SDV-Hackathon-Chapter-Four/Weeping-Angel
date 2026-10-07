@@ -30,7 +30,7 @@ is not authoritative) — they do not become open issues here.
 ### 2026-10-07 - Add orthogonal Guardian detection levels
 - **Status**: Resolved
 - **Description**: Added `Warning`, `Violation`, and `Critical` levels orthogonal to detection classes; thermal state now uses one `THERMAL_LIMIT` class and continuous model bounds produce utilization warnings.
-- **Notes**: Thermal DFM IDs and existing physical-violation IDs remain unchanged. Spread/hotspot/rate warnings remain internal observations without new DFM entries; boundary, transition, catalog, and projection tests pass in the 37-test dev-container suite.
+- **Notes**: Thermal DFM IDs and existing physical-violation IDs remain unchanged. Spread/hotspot/rate warnings remain internal observations without new DFM entries. Thermal normalization now validates `absolute_min_c <= reference_c < hot_state_c <= absolute_max_c` without relaxing disabled SoC-coupling validation; boundary, transition, catalog, projection, and configuration tests pass in the dev-container suite.
 
 ### 2026-10-07 - Publish Guardian fault events over uProtocol
 - **Status**: Resolved
