@@ -1,6 +1,6 @@
 {
     "id": "battery_guardian",
-    "version": 3,
+    "version": 4,
     "faults": [
         {
             "id": {
@@ -40,6 +40,22 @@
             },
             "name": "BatteryTempStreamStale",
             "summary": "No battery temperature sample received within the missing-packet timeout.",
+            "category": "Communication",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempGenerationGap"
+            },
+            "name": "BatteryTempGenerationGap",
+            "summary": "Source timestamps skipped at least one generation; battery samples were lost.",
             "category": "Communication",
             "severity": "Error",
             "compliance": [

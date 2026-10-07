@@ -18,3 +18,9 @@ that stopped being relevant (6+ months).
 - **Prevention**: Align component capabilities with ADR consequences (ADR-014 ❌ items) before planning new campaign work.
 
 (no other entries yet)
+
+### 2026-10-07 - Unmapped Guardian warning detections are invisible to the collector
+- **Issue**: Only DFM-mapped `class/level` pairs are published on `//guardian/1001/1/8001`, so the continuous-model warnings (`PHYSICAL_TEMP_SPREAD`/`PHYSICAL_TEMP_HOTSPOT`/`PHYSICAL_TEMP_RATE` `WARNING`) never reach the Evidence Collector or the observer UI. ADR-006/007 require them as original Guardian decisions.
+- **Root Cause**: The raw `GuardianEvidenceEvent` stream (`//guardian-vss/9000/1/9002`, ADR-007) is specified but still unimplemented; today only the mapped `GuardianFaultEvent` path exists.
+- **Solution**: Open. Implement the raw evidence stream and have the collector subscribe to it alongside the mapped topic; v1 deliberately accepts the visibility gap (tracked under ADR-007).
+- **Prevention**: Treat the raw decision view as a first-class contract whenever detection vocabulary grows, so unmapped warnings stay observable by design.

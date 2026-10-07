@@ -10,6 +10,10 @@ path = "source/lib.rs"
 name = "case-mutator"
 path = "source/main.rs"
 
+[[bin]]
+name = "case-oracle"
+path = "source/evaluate.rs"
+
 [dependencies]
 anyhow = "1"
 battery-guardian = { path = "../guardien" }

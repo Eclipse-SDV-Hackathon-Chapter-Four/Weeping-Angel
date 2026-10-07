@@ -35,6 +35,7 @@ Documentation     Battery Guardian — physical-consistency and fault-campaign e
 ...                 PHYSICAL_SOC_RATE / VIOLATION
 ...                 SIGNAL_STUCK / VIOLATION
 ...                 STREAM_STALE / VIOLATION
+...                 STREAM_GENERATION_GAP / VIOLATION (missing source-timestamp generations)
 ...               Continuous WARNING observations remain internal when no DFM mapping exists.
 ...
 ...               Physical model checked by the Guardian:
@@ -54,7 +55,7 @@ Library           SovdFaultLibrary
 ...                   catalog=%{CATALOG=../config/battery_guardian/guardian_diagnostics.json}
 ...                   report=%{REPORT=../reports/evidence_report.md}
 
-Suite Setup       Opensovd Lists All Catalog Faults    11
+Suite Setup       Opensovd Lists All Catalog Faults    12
 Suite Teardown    Write Evidence Report
 Test Setup        Reset To Clean Baseline
 
@@ -71,6 +72,7 @@ ${F_SOC_RANGE}           BatterySocRange
 ${F_SOC_RATE}            BatterySocRate
 ${F_SIGNAL_STUCK}        BatterySignalStuck
 ${F_STREAM_STALE}        BatteryTempStreamStale
+${F_GENERATION_GAP}      BatteryTempGenerationGap
 
 *** Test Cases ***
 # -----------------------------------------------------------------------------
@@ -183,9 +185,9 @@ Signal Out Of Range Is Detected
 Transport Delay Raises Stream Stale
     [Documentation]    Delay beyond the freshness deadline is observable as STREAM_STALE; Guardian cannot prove transport.delay as root cause.
     [Tags]    inject:transport.delay    detect:STREAM_STALE    owner:guardian    ambiguous-root-cause
-    Inject Transport Delay
+    Inject Scenario    transport_delay
     Wait For Active Faults    ${F_STREAM_STALE}    timeout=15
-    Record Scenario    transport.delay    Zenoh delay beyond freshness deadline
+    Record Scenario    transport.delay    CAN replay delay beyond freshness deadline
     ...    ${F_STREAM_STALE}    PASS
 
 Transport Drop Raises Stream Stale

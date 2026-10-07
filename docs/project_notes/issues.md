@@ -9,6 +9,21 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
+### 2026-10-07 - Map CAN TimeStamp into VSS (SourceTimestamp)
+- **Status**: In Progress
+- **Description**: `product/config/vss_dbc.json` maps the DBC `TimeStamp` to `Vehicle.Powertrain.TractionBattery.SourceTimestamp` (`uint32`, ms); `val.proto` documents it as `Datapoint.uint32`; `product/config/vss_overlay.json` is loaded by `tools/start_databroker.sh`. `vss_bridge` now sets `timestamp_ms` from `SourceTimestamp` (one event per frame, incomplete samples dropped and logged) instead of `now_ms()`.
+- **Notes**: Verified in the dev container: 5 bridge unit tests pass; replay of `battery_temp_with_ts.asc` (140 frames) yields correct source timestamps 0–13900 ms. With `interval_ms: 100` only 91 frames arrive (49 whole frames throttled by receive jitter → 200-ms gaps → false `STREAM_GENERATION_GAP`); with `interval_ms: 0` all 140 arrive. Set to `interval_ms: 50` (2026-10-07): 140/140 frames, all 100-ms deltas. Frames arriving < 50 ms apart (e.g. bursts after replay delay) are still throttled. Open: bridge proto copy differs from `product/config/proto` by the comment only.
+
+### 2026-10-07 - Golden-run orchestration runner (end2end-runner)
+- **Status**: Resolved
+- **Description**: Added `product/components/end2end-runner/` with `run_golden.sh` (bash, dev-container target) + README: builds components, starts zenoh/databroker/vss_publisher once, resets Guardian+DFM+SOVD per case, runs the collector per case, aggregates tri-state verdicts. Registered cases: `baseline` (nominal template, empty ground truth) and `signal_out_of_range` (mutator-generated).
+- **Notes**: First full runs verified in the dev container (docker image `codium-devcontainer-weeping-angel`, repo bind-mounted, run as repo uid with PATH incl. the venv). Runner bug found+fixed: `log()` wrote to stdout and corrupted the command-substitution verdict capture (produced a false overall PASS). Verdict plane is ADR-012 (mapped stream 8001); ADR-007 raw-stream correlation and DFM/SOVD verdict dimensions are not wired yet.
+
+### 2026-10-07 - Golden run findings: collector timing flake + dirty nominal baseline
+- **Status**: Open
+- **Description**: Two real product issues surfaced from the first golden runs. (1) The collector has no timing tolerance around the injection window: one run missed `PHYSICAL_TEMP_ABSOLUTE_LIMIT` by 3 ms (detection event placed at the latest battery event, arrival jitter put it at t=1997 against window start 2000) → FAIL; an immediate rerun PASSed → verdicts are flaky without tolerance (harness spec §8 open point "accepted timing tolerance", now evidence-backed). (2) The nominal template `battery_temp_with_ts.asc` is not a clean baseline: the Guardian reports `PHYSICAL_SOC_RATE Failed` repeatedly, one `PHYSICAL_TEMP_RATE`, one `THERMAL_LIMIT` (trajectory crosses 60 °C) and one `STREAM_STALE` per replay, so a `[]`-ground-truth baseline can never PASS.
+- **Notes**: (1) candidate fix: small tolerance (e.g. 100–200 ms) around window edges in the collector, or event placement anchored to the next battery event instead of the latest; needs a spec decision. (2) candidate causes: the bridge still stamps wall-clock `now_ms()` (ADR-013 migration open; jittered Δτ makes the SoC-rate limit trip), and the trajectory itself crosses THERMAL_LIMIT/WARNING — a clean baseline needs either a different nominal trace or an explicit baseline-oracle definition.
+
 ### 2026-10-06 - Evidence-report defects found during demo analysis
 - **Status**: Withdrawn
 - **Description**: Demo-derived observations (missing Stuck row in the checked-in report; sticky `BatteryTempSignalStale` indicator across scenarios) were withdrawn per ADR-003 — the demo is not authoritative, so demo-sample quirks do not become project issues.
@@ -37,6 +52,11 @@ is not authoritative) — they do not become open issues here.
 - **Description**: Every DFM fault change is also published as JSON `GuardianFaultEvent` on `//guardian/1001/1/8001`; aggregation moved to `guardian_faults.rs`, DFM and uProtocol channels independent (ADR-007).
 - **Notes**: Transitions plus startup baseline only. 41 Rust tests pass; Clippy (`-D warnings`) and rustfmt clean in the dev-container image. The corrected ADR-007 supersedes this mapped event as the Evidence Collector's original Guardian view; the implementation remains valid only as a separate mapped stream, not as a substitute for raw decisions.
 
+### 2026-10-07 - Detect lost battery samples from source timestamps
+- **Status**: Resolved
+- **Description**: Guardian evaluates `timestamp_ms`: new `STREAM_GENERATION_GAP / VIOLATION` → DFM `BatteryTempGenerationGap` (ADR-015), rates on Δτ, sample queue instead of overwrite, `interval_ms`/`timestamp_ms` evidence.
+- **Notes**: 59 Guardian tests, fmt and Clippy clean in `battery-guardian-dev:local`; mutator oracle and drop goals allow the gap co-detection; Evidence Collector accepts it for `transport.drop`. Open: VSS bridge wall-clock stamping causes false gaps live; duplicate/out-of-order detection not implemented.
+
 ### 2026-10-07 - Align source timestamps and Evidence Collector subscriptions
 - **Status**: In Progress
 - **Description**: Decided that every battery CAN message has a zero-based millisecond generation timestamp preserved into BatteryTempEvent; the Evidence Collector subscribes to battery events, every raw Guardian decision, and the independently produced DFM/OpenSOVD messages.
@@ -50,12 +70,12 @@ is not authoritative) — they do not become open issues here.
 ### 2026-10-07 - Specify battery campaign test harness
 - **Status**: In Progress
 - **Description**: Define five 20-second reference scenarios, multi-incident elementary-fault campaigns, pre-generated experiment artifacts, and the later Evidence Collector based execution flow.
-- **Notes**: ADR-014 and `product/doc/testing/battery_campaign_test_harness.md` capture the agreed framework and clearly separate decided behavior from open timing, trajectory, reset, and runner details. Campaign artifacts require no hashes. The current Case Mutator still emits a model SHA-256 and supports one injection per request; both must be reconciled when multi-incident generation is implemented.
+- **Notes**: ADR-014 and `product/doc/testing/battery_campaign_test_harness.md` capture the agreed framework. Golden baselines, standard five-case profiles, timing slots, isolation, readiness, evidence windows, reporting, and the DevContainer Python runner are decided. Every Golden ASC now has same-prefix empty Ground Truth and an exact transition Oracle; Overtemp and Hotspot include their real fault timings. The compact configuration is split into harness selection, default campaigns, and explicit combined incidents; experiment files use a Collector-compatible `case` prefix. Campaign artifacts require no hashes. Transport delay/drop are deterministic ASC/CAN replay mutations; the product uses no Toxiproxy. Remaining specification work covers generated artifact/verdict schemas, readiness payloads, and runner/Make commands. The current Case Mutator still emits a model SHA-256 and supports one injection per request; the current Collector is mapped-only and still treats empty ground truth as a no-fault baseline; both must be reconciled.
 
 ### 2026-10-06 - Component & channel specification (product/doc/architecture)
 - **Status**: In Progress
 - **Description**: Draft `product/doc/architecture/components_and_channels.md`: component overview (C1–C15), edge overview (E1–E18), short per-component/channel specs, and option analyses for mitigation, DFM IPC transport, `run_id` entry, collector correlation and report generation.
-- **Notes**: Decisions recorded as ADR-004 (source timestamp as identity and for generation-gap/drop detection, local receive time for timeout/rate evaluation; supersedes ADR-001), ADR-005 (DFM reinstated), ADR-006 (v1 scope), ADR-007 (mitigation M1, iceoryx2 DFM IPC, `run_id` A+C, `verdict.json`→MD, Toxiproxy) and ADR-008 (contract YAML + model doc authoritative). Doc deepened to payload level with sequence diagram, fault-class mapping and failure-mode matrix. Still open: periodic Guardian state/snapshot RID (if any). Transport reorder deferred per ADR-009 (no native Toxiproxy toxic). `transport.duplicate`/`STREAM_DUPLICATE` added to the contract YAML.
+- **Notes**: Decisions recorded as ADR-004 (source timestamp as identity and for generation-gap/drop detection, local receive time for timeout/rate evaluation; supersedes ADR-001), ADR-005 (DFM reinstated), ADR-006 (v1 scope), ADR-007 (mitigation M1, iceoryx2 DFM IPC, `run_id` A+C, `verdict.json`→MD) and ADR-008 (contract YAML + model doc authoritative). Doc deepened to payload level with sequence diagram, fault-class mapping and failure-mode matrix. Product transport faults are now ASC/CAN replay mutations; the earlier Toxiproxy assumption is removed. Still open: periodic Guardian state/snapshot RID (if any). `transport.duplicate`/`STREAM_DUPLICATE` exists in the contract but remains outside the implemented Mutator scope.
 
 ### 2026-10-07 - Evidence Collector on GuardianFaultEvent stream
 - **Status**: In Progress
@@ -76,3 +96,8 @@ is not authoritative) — they do not become open issues here.
 - **Status**: Resolved
 - **Description**: `product/config/battery_temp_with_ts.asc` converted to canonical CAN FD lines with DLC code `0xA` and 16-byte payload; Classic CAN replay was cut to 8 bytes by python-can, losing `CellTempMin` and `StateOfCharge`. The Case Mutator parses/renders both line formats while product replays use CAN FD.
 - **Notes**: Replay via `product/components/start_can.sh` delivers all four signals; mutator and collector tests pass. The implemented format is now normative in `product/doc/can/battery_can_fd_replay.md`. Collector reads the mutator's `<stem>.ground_truth.yaml` and its `source_started_at_ms`/`source_finished_at_ms` window.
+
+### 2026-10-07 - Specify live scenario observer for the Evidence Collector
+- **Status**: Resolved
+- **Description**: Added `product/doc/observer/live_observer.md` and ADR-016: a read-only Live Scenario Observer as a feature-flagged module (`observer`, `--observer`) inside the Evidence Collector binary, fed from in-process state and served to the browser via HTTP + SSE on `127.0.0.1:8090` with embedded static assets.
+- **Notes**: Uses only present data — battery stream and mapped `GuardianFaultEvent` (`//guardian/1001/1/8001`) — plus the ADR-014 bundle (`ground_truth.yaml`, `oracle.yaml`); reuses the `battery-guardian` library for static bands; relative-time axis per ADR-013. Not DoD-critical. Known v1 limits: unmapped Guardian warnings invisible (bug logged) and step-after dynamic limits. Follow-ups: ADR-012 amendment for `oracle.yaml`, raw decision stream (ADR-007), `key_facts.md`/`components_and_channels.md`/E19 updated.

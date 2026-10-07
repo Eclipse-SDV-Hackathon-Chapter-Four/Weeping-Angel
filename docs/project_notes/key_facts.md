@@ -12,7 +12,7 @@ Never store credentials here — this file is committed to git.
 - Demo app: `demo/` — self-documenting via `demo/README.md`, `demo/docs/README.md`, `demo/tutorial.md`
 - Idea input (no authority over ADRs, see `decisions.md` ADR-002): `PLAN.md`
 - Build environment: root Nix flake (`nix develop`); build through the devshell, not the user nix profile
-- One-command evidence run: `demo/scripts/run_demo.sh` (needs Toxiproxy binaries in `demo/.tools/`, not committed)
+- Legacy demo evidence run: `demo/scripts/run_demo.sh`; its Toxiproxy-based transport scenario is historical and is not part of the product harness
 
 ## uProtocol Topics (over Zenoh; `up-rust` + `up-transport-zenoh`)
 
@@ -39,7 +39,8 @@ Never store credentials here — this file is committed to git.
 - Supported injected classes: `transport.delay`, `transport.drop`, `source.dropout`, `signal.stuck`, `signal.spike`, `signal.drift`, `signal.out_of_range`, and `signal.combination`
 - Decided input contract: BatteryTempEvent on `battery-vss/9001/1/9001` carries `temp_min`, `temp_avg`, `temp_max`, `soc`, and the original CAN generation `timestamp_ms`; the product frame 0x100 carries it explicitly (ADR-011). Timestamps are integer milliseconds starting at 0, are the pipeline-wide common time base, and must be preserved unchanged from the product frame to uProtocol and beyond (ADR-013; bridge implementation pending)
 - Target Guardian timing: the relative `timestamp_ms` is the common time base; the model distinguishes the source/generation interval $\Delta\tau$ (from `ts`, for rate/dynamics) from the receive interval $\Delta t^{\mathrm{recv}}$ projected onto the same base (for freshness/age, drop/jitter, duplicate/reorder). Local receive time is not a separate model base (ADR-013)
-- Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once; all timing on the relative base (ADR-013)
+- Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, received samples queued and each evaluated exactly once; all timing on the relative base (ADR-013)
+- Lost samples: Δτ > `max_generation_interval_ms` (150 ms) → `STREAM_GENERATION_GAP / VIOLATION` → DFM `BatteryTempGenerationGap` (ADR-015)
 - Guardian observations are `DetectionClass × DetectionLevel`: class identifies the model rule; level is `WARNING`, `VIOLATION`, or `CRITICAL`
 - Thermal observation: `THERMAL_LIMIT / WARNING` from 60 °C to below 70 °C and `THERMAL_LIMIT / CRITICAL` from 70 °C; the warning threshold is derived from `absolute_max_c - warning_margin_c`
 - Continuous checks: spread, hotspot, and temperature rate emit `WARNING` from 80% through 100% utilization and `VIOLATION` above the model limit; utilization and residual are retained
@@ -63,16 +64,24 @@ Never store credentials here — this file is committed to git.
 - Supports all canonical v1 classes: stuck, spike, drift, out-of-range, signal combination, transport delay/drop, and source dropout
 - Emits mutated ASC, independent injection ground truth, and a Guardian test-oracle sidecar; impossible goals produce structured `UNSATISFIABLE`
 - Preserves non-target ASC lines byte-exactly and never rebases embedded source timestamps on drop; transport delay changes replay time while preserving generation time
+- Product transport delay/drop operate on the ASC/CAN replay path before the CAN Provider; no Toxiproxy or Zenoh-link mutation is used
 - Current Rust tests pass 6 unit tests and 5 end-to-end generation tests; the current checkout still needs `cargo fmt` before the complete `make check` is green
 
 ## Battery Campaign Test Harness
 
 - Normative discussion specification: `product/doc/testing/battery_campaign_test_harness.md`; CAN FD replay contract: `product/doc/can/battery_can_fd_replay.md`
 - Five version-controlled 20-second reference scenarios at the nominal 100-ms cycle: three nominal operating states (`cold_nominal`, `warm_nominal`, `hot_nominal`) and two genuine fault states (`overtemp_fault`, `hotspot_fault`)
+- Golden trajectories are deterministic committed ASC data with same-prefix Ground Truth and Oracle YAMLs. Ground Truth is empty because nothing is injected; Oracle YAMLs carry the exact expected transitions, including recurring Overtemp Rate warnings. `validation.json` is a derived review summary. Hot nominal intentionally carries a Thermal Warning, while the two genuine-fault regressions may remain active at replay end
 - Initial elementary-fault campaigns mutate only the three nominal scenarios; the two fault scenarios are unmodified positive regression runs until combined-fault testing is explicitly specified
-- One campaign represents one canonical injected fault class; each generated experiment ASC contains five separated incidents of that class with explicit recovery intervals and per-incident expectations
+- Seven elementary campaigns run across the three nominal scenarios, plus one initially configured combined campaign on `warm_nominal`, for 22 experiments; each experiment contains five separated incidents with explicit recovery and expectations
+- Standard variation is class-specific and uses five fixed positions; even scheduling provides a 1-s lead-in, five 3.5-s incident/recovery slots, and a 1.5-s final drain
 - Warning expectations are valid only for Guardian checks that define warnings; binary checks use subthreshold/boundary/violation-style cases rather than inventing warning levels
 - The harness pre-generates experiment bundles containing the ASC replay, injection ground truth, and oracle. No hash or provenance artifact is generated
+- Harness source configuration lives in `product/config/battery_campaign`: `harness.yaml` selects scenarios and campaign files, `default_campaigns.yaml` expresses frequency and variation compactly, and explicit combined campaigns list their individual incidents
+- Experiment bundles share the Collector-compatible `case` prefix and keep runtime results in an `evidence/` subdirectory
+- The v1 campaign runner is Python inside the DevContainer. Each experiment restarts the stateful chain, uses fresh DFM storage, waits for machine-readable readiness, starts the Collector before replay, and drains evidence for 3 s after confirmed replay completion
+- Evidence timing uses exact battery source timestamps, 100-ms Guardian slack, and 500-ms DFM projection slack. Infrastructure failures are `INCONCLUSIVE`; campaign execution continues by default
+- Every execution gets a unique `evidence/<run-id>/` directory containing Collector JSON, normative `verdict.json`, derived `report.md`, logs, and DFM state; existing runs are not overwritten
 - Future execution runs one experiment at a time and correlates battery input, raw Guardian decisions, and DFM/OpenSOVD evidence; verdicts are `PASS`, `FAIL`, or `INCONCLUSIVE`
 
 ## Evidence Collector
@@ -80,6 +89,7 @@ Never store credentials here — this file is committed to git.
 - Subscribes directly to `battery-vss/9001/1/9001` and receives the same BatteryTempEvent payloads, including zero-based `timestamp_ms`, as the Guardian
 - Subscribes to the raw `GuardianEvidenceEvent` stream and receives every original Guardian decision, including decisions omitted from or aggregated by the DFM projection; its URI/RID remains to be fixed in the interface contract
 - Correlates source battery input, original Guardian decisions, injection ground truth, and DFM/OpenSOVD visibility; the direct subscriptions do not replace the diagnostic chain
+- Live Scenario Observer: feature-flagged module (`observer`) plus CLI option `--observer` inside the collector binary; serves a read-only static SSE frontend from in-process collector state (ADR-016, `product/doc/observer/live_observer.md`)
 
 ## CAN Assets (`demo/can/`)
 
@@ -90,12 +100,14 @@ Never store credentials here — this file is committed to git.
 ## Product CAN Assets (`product/config/`)
 
 - Frame 0x100 `BatteryTemperature` is CAN FD with standard 11-bit ID, DLC code `0xA`, and a 16-byte payload: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged; `TimeStamp` is the pipeline-wide common time base (ADR-011, ADR-013); the normative ASC form is `CANFD … 0 0 a 16 <bytes>`
+- `vss_dbc.json` maps the CAN `TimeStamp` to `Vehicle.Powertrain.TractionBattery.SourceTimestamp` (`uint32`, ms, `Datapoint.uint32`); the path is not in VSS 6.0 and comes from `vss_overlay.json`, which `tools/start_databroker.sh` loads via `--vss <catalogue>,<overlay>`; all product mappings use `interval_ms: 50` (100 dropped jittered frames)
 - `battery_temp_with_ts.asc` starts source time at 0 ms; value mutation and frame deletion preserve all remaining embedded timestamps unchanged
 - Temperature and SoC quantization are 0.5 °C and 0.5 pp; nominal generation period is 100 ms
 
-## Ports (demo)
+## Ports (legacy demo)
 
 - 7447 Zenoh (uProtocol bus) · 7448 Toxiproxy(zenoh) · 7690 OpenSOVD gateway · 8080 Guardian HTTP (`/health`, `/state`) · 8474 Toxiproxy API · 55555 kuksa-databroker
+- 8090 Live Scenario Observer HTTP/SSE (`127.0.0.1`, ADR-016), only when the collector runs with `--observer`
 
 ## Fault Catalog (`demo/diagnostics/catalog/battery_guardian.json`)
 

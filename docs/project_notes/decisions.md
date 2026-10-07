@@ -243,14 +243,15 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 **Decision:**
 - v1 delivers the single-host flow in parallel branches: the VSS Publisher sends `BatteryTempEvent` to both Guardian and Evidence Collector; the Guardian publishes every internal detection transition unchanged as `GuardianEvidenceEvent` to the Evidence Collector and separately projects configured detections into DFM; DFM continues through OpenSOVD to the Evidence Collector.
 - openDuT (campaign supervisor) and Ankaios are specified but not implemented in v1.
-- The transport-fault injection mechanism remains open.
+- In v1, `transport.delay` and `transport.drop` refer to the ASC/CAN replay path before the CAN Provider. The Case Mutator changes ASC replay timing or omits CAN frames while preserving embedded source timestamps. No Toxiproxy or uProtocol-network fault injector is used.
 
 **Alternatives Considered:**
 - Attempt openDuT/Ankaios in v1 → Rejected: dilutes the evidence path.
-- Freeze the transport-fault mechanism now → Rejected: options still under review.
+- Inject faults on the uProtocol/Zenoh link with Toxiproxy → Rejected for the product harness: no such proxy is part of the product setup, and the CAN replay artifact already provides deterministic delay/drop injection.
 
 **Consequences:**
 - ✅ Focused v1; later phases have a documented place in the interface spec.
+- ✅ Transport experiments are pre-generated, inspectable, and replayable without a live proxy.
 - ❌ DoD 7/8 not met in v1 (documented only).
 
 ### ADR-011: Product CAN FD frame carries the source timestamp explicitly (amends ADR-008) (2026-10-07)
@@ -413,10 +414,17 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
 **Decision:**
 - The harness uses five version-controlled, 20-second reference scenarios at the nominal 100-ms battery-message cycle: `cold_nominal`, `warm_nominal`, `hot_nominal`, `overtemp_fault`, and `hotspot_fault`.
+- Every committed Golden ASC has same-prefix `.ground_truth.yaml` and `.oracle.yaml` sidecars. Ground truth is empty because no incident is injected; the Oracle carries exact expected Guardian transitions. `validation.json` is only a derived per-frame review summary. The trajectories are deterministic and contain no random noise. `hot_nominal` deliberately carries a Thermal Warning throughout; the two genuine-fault traces are positive regressions and need not clear before replay end.
 - Initial elementary-fault campaigns use the three nominal scenarios as mutation templates. The two genuine-fault scenarios run unmodified as positive regression experiments; combined faults based on them require a later explicit specification.
-- One campaign represents one canonical injected fault class. For each applicable reference scenario it pre-generates one experiment ASC containing five temporally separated incidents of that class, with recovery intervals sufficient to observe both activation and clearing.
+- One campaign represents one canonical injected fault class. Seven elementary campaigns run on the three nominal scenarios; `signal.combination` is configured separately, initially once on `warm_nominal`, for 22 experiments total. Each experiment ASC contains five temporally separated incidents of its class, with recovery intervals sufficient to observe both activation and clearing.
 - Each incident has independent injection ground truth and Guardian/DFM expectations. Different incident strengths test meaningful boundaries and levels, but a `WARNING` expectation is used only for Guardian rules that define warning semantics. Binary rules never acquire synthetic warning levels.
 - Generation and execution remain separate phases. Generation emits the ASC replay, ground truth, and oracle before system execution. A future runner resets the system, starts evidence capture, replays exactly one experiment, allows a drain period, and produces a tri-state `PASS` / `FAIL` / `INCONCLUSIVE` verdict.
+- Harness configuration is split into one small root file, one compact default-campaign file, and explicit files for combined campaigns. Default frequency and strength variation use abstract generation goals; executed numeric values remain model-derived and are recorded in ground truth.
+- Every experiment uses the common `case` prefix (`case.asc`, `case.ground_truth.yaml`, `case.oracle.yaml`) and stores Collector output below its `evidence/` directory, matching the Evidence Collector's existing prefix interface without path reconstruction.
+- The standard five-case variation is class-specific: utilization points for Spike and Drift, duration/window boundaries for Stuck, legal/illegal envelope boundaries for Out-of-range, and 400/500/700/1000/2000-ms receive gaps for Delay, Drop, and Source Dropout. Even scheduling reserves 0-1 s for lead-in, five 3.5-s incident/recovery slots, and 18.5-20 s for final drain.
+- The v1 runner is a Python process inside the DevContainer, not another harness container. Every experiment restarts the stateful path and uses fresh DFM storage. Readiness is condition-based, the Collector starts before replay, terminal battery evidence plus replay-process success define completion, and the default post-replay drain is 3 s.
+- Evidence matching uses exact source timestamps for battery input, 100-ms right-hand slack for Guardian decisions, and 500-ms right-hand slack for DFM projection. Unmapped Guardian decisions are `NOT_APPLICABLE` on the DFM plane. Campaign execution continues after isolated infrastructure failures, recording them as `INCONCLUSIVE`.
+- Runtime evidence is retained under a unique `evidence/<run-id>/` directory as Collector JSON, normative verdict JSON, derived Markdown, process logs, and fresh per-run DFM storage; existing run directories are never overwritten.
 - Campaign artifacts do not contain model hashes, configuration hashes, trace hashes, artifact hashes, or a dedicated provenance file. Stable IDs, explicit paths, committed specifications, and the generated artifacts themselves provide the required traceability.
 - The detailed harness contract, decided points, and open questions live in `product/doc/testing/battery_campaign_test_harness.md`.
 
@@ -434,3 +442,58 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ The Mutator must be extended from one injection to an ordered incident sequence.
 - ❌ Exact trajectories, incident schedules, campaign applicability, reset behavior, and runner technology remain to be agreed.
 - ❌ The current Mutator's emitted model hash must be removed when its output is aligned with this decision.
+
+### ADR-015: Guardian detects lost samples as STREAM_GENERATION_GAP from source timestamps (2026-10-07)
+
+**Context:**
+- ADR-013 makes `timestamp_ms` the common time base and defines unexpected forward gaps in `ts` as missing generations, but the Guardian ignored the timestamp: it used local receive time for rates and only saw sustained loss (> 500 ms) as `STREAM_STALE`.
+- The runtime kept only the latest sample, so several samples arriving in one 100-ms cycle were silently overwritten; with gap detection this would itself look like loss.
+- Pass/fail results of the new check must reach the DFM like the existing checks.
+
+**Decision:**
+- New detection class `STREAM_GENERATION_GAP`, binary level `VIOLATION`, DFM fault `BatteryTempGenerationGap` (category Communication, severity Error). Raised when `Δτ = ts_k − ts_max > max_generation_interval_ms` (150 ms = nominal 100 ms + tolerance), where `ts_max` is the highest evaluated source timestamp; the next regular sample clears it (`Failed` → `Passed`).
+- Name uses "generation", not "sequence": no sequence numbers exist (ADR-001); the observation is a symptom and does not infer `transport.drop` vs. source loss.
+- `timestamp_ms` is required in `BatteryTempEvent`; messages without it are malformed. Samples carry it, and temperature/SoC rates use `Δτ` (ADR-013), so burst arrival after delay/loss does not produce false rate violations.
+- Received samples are queued and each is evaluated exactly once per cycle in arrival order.
+- A timestamp behind `ts_max` while the stream is `STREAM_STALE` is a source/replay restart: baseline, previous sample and stuck window reset; no gap.
+- Evidence (DFM env data and `GuardianFaultEvent`) gains optional `interval_ms` (Δτ) and `timestamp_ms` (causing sample).
+- Freshness keeps using local monotonic receive instants; the age difference equals the age on the projected relative clock (offset cancels), so ADR-013 is respected without a projected clock yet.
+
+**Alternatives Considered:**
+- Also add `STREAM_DUPLICATE` / `STREAM_OUT_OF_ORDER` now → Deferred: out of the requested scope; non-increasing timestamps are simply not a gap.
+- `WARNING` for one missing generation, `VIOLATION` for several → Rejected: loss is binary like stale; Δτ in the evidence carries the magnitude.
+- Gap limit derived only from the stale timeout → Rejected: would miss short losses, which are the point of the check.
+
+**Consequences:**
+- ✅ Single lost samples are detected and reported to the DFM with Δτ evidence; `transport.drop` yields `STREAM_STALE` and `STREAM_GENERATION_GAP`.
+- ✅ Rates follow the model doc (Δτ); no sample is lost inside the Guardian.
+- ❌ The VSS bridge still stamps wall-clock `now_ms()` per broker update (ADR-013 open point): jitter above 150 ms raises false gaps, and partial updates can produce several events per frame. The bridge must preserve the CAN `TimeStamp` before live runs rely on this check.
+- ❌ A source restart without a stale phase is not recognised (no gaps until the new timeline passes `ts_max`); out-of-order samples still update the previous sample.
+
+### ADR-016: Live scenario observer as a feature-flagged module of the Evidence Collector (2026-10-07)
+
+**Context:**
+- A browser view of a running campaign experiment is wanted: live battery signals, model ranges, detected fault classes, and the injected incidents on one relative-time axis.
+- The Evidence Collector already subscribes to the battery stream and the Guardian fault-event stream and holds the correlation state; candidate collector→UI paths were REST/SSE, library binding, iceoryx2 IPC, and uProtocol.
+- Only currently present data may be used; the raw `GuardianEvidenceEvent` stream is still unimplemented. The view is read-only and must not duplicate model or verdict semantics.
+
+**Decision:**
+- The observer is a **feature-flagged module plus a CLI option inside the Evidence Collector binary** (Cargo feature `observer`, option `--observer`), not a separate process and not a separate crate. It reads the collector's in-process state directly, so there is no collector→UI transport link.
+- The browser link is **HTTP + Server-Sent Events** on `127.0.0.1:8090`, serving an embedded static frontend; the first SSE event on every connect is a full snapshot, followed by uncoalesced `sample`/`detection` deltas.
+- The observer uses the ADR-013 relative time base (`t0` = first battery timestamp), re-uses the `battery-guardian` library for static bands, and reads dynamic evidence from the Guardian fault-event stream.
+- One experiment per collector process; the last view stays served until the process terminates, and a follow-run process overwrites the state. The observer is not required to survive the run, and the runner terminates the predecessor before the next run.
+- The observer is read-only, is **not DoD-critical**, and is not a source of truth. Full contract: `product/doc/observer/live_observer.md`.
+
+**Alternatives Considered:**
+- Separate UI service/process → Rejected: an extra process and transport for a view fed from state already held by the collector.
+- REST/SSE, uProtocol, or iceoryx2 as collector→UI transport → Rejected in favor of in-process library coupling; only the browser link still needs a wire protocol.
+- Recomputing Guardian decisions or verdicts in the UI → Rejected: duplicates ADR-005 semantics.
+
+**Consequences:**
+- ✅ One binary, one process; the collector stays the main binary and the single evidence hub.
+- ✅ The browser gets push with automatic reconnect; embedded assets need no runtime files.
+- ✅ Static bands come from the authoritative model library (no formula duplication); the ADR-013 time base is reused unchanged.
+- ❌ The collector gains `axum`/asset-serving responsibilities and an opt-in HTTP surface.
+- ❌ v1 shows only DFM-mapped classes; unmapped warnings stay invisible until the raw decision stream (ADR-007) exists (bug logged).
+- ❌ Binding `oracle.yaml` as the collector's expectation source requires the ADR-012 amendment.
+- ❌ Dynamic limits are rendered step-after because fault-level `evidence` exists only at transitions.

@@ -35,8 +35,8 @@ struct BatteryTempEvent {
     temp_avg: f32,
     temp_max: f32,
     soc: f32,
-    #[serde(default)]
-    timestamp_ms: Option<u64>,
+    /// Source/generation time on the relative time base (ADR-013); required.
+    timestamp_ms: u64,
 }
 
 #[derive(Clone)]
@@ -63,7 +63,7 @@ impl UListener for BatteryTempListener {
             temp_avg = event.temp_avg,
             temp_max = event.temp_max,
             soc = event.soc,
-            timestamp_ms = ?event.timestamp_ms,
+            timestamp_ms = event.timestamp_ms,
             "[EventReceived]"
         );
 
@@ -73,6 +73,7 @@ impl UListener for BatteryTempListener {
             event.temp_avg,
             event.temp_max,
             event.soc,
+            event.timestamp_ms,
             received_at,
         );
         self.state.runtime.lock().await.receive_sample(sample);
@@ -113,6 +114,8 @@ fn report_detection(detection: &Detection, faults: &mut FaultChannels) {
             limit = ?detection.limit,
             residual = ?detection.residual,
             utilization = ?detection.utilization,
+            interval_ms = ?detection.interval_ms,
+            sample_timestamp_ms = ?detection.sample_timestamp_ms,
             "Guardian detection active"
         );
     } else {
@@ -145,6 +148,7 @@ fn start_periodic_guardian(
 
 #[derive(Serialize)]
 struct SensorSnapshot {
+    timestamp_ms: u64,
     temp_min: f32,
     temp_avg: f32,
     temp_max: f32,
@@ -174,6 +178,7 @@ async fn get_state(State(state): State<AppState>) -> Json<GuardianSnapshot> {
         "FRESH"
     };
     let sample = runtime.latest_sample().map(|sample| SensorSnapshot {
+        timestamp_ms: sample.timestamp_ms,
         temp_min: sample.temp_min,
         temp_avg: sample.temp_avg,
         temp_max: sample.temp_max,

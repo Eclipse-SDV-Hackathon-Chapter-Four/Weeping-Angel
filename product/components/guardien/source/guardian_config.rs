@@ -16,6 +16,7 @@ struct ConfigurationFile {
 pub struct GuardianConfig {
     pub evaluation_period_ms: u64,
     pub missing_packet_timeout_ms: u64,
+    pub max_generation_interval_ms: u64,
     pub warning: WarningConfig,
     pub temperature: TemperatureConfig,
     pub soc: SocConfig,
@@ -129,6 +130,9 @@ impl GuardianConfig {
         }
         if self.missing_packet_timeout_ms == 0 {
             bail!("guardian.missing_packet_timeout_ms must be greater than zero");
+        }
+        if self.max_generation_interval_ms == 0 {
+            bail!("guardian.max_generation_interval_ms must be greater than zero");
         }
 
         require_finite(
@@ -256,6 +260,15 @@ mod tests {
     #[test]
     fn missing_mandatory_parameter_fails() {
         let yaml = CONFIG.replace("  evaluation_period_ms: 100\n", "");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn generation_interval_limit_must_be_positive() {
+        let yaml = CONFIG.replace(
+            "max_generation_interval_ms: 150",
+            "max_generation_interval_ms: 0",
+        );
         assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
     }
 

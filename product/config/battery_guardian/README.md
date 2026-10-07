@@ -43,8 +43,11 @@ and above 1.0 they produce `VIOLATION`. Their detections carry both
 `residual = observed - limit` and utilization. Cooling rate uses positive
 magnitudes for both values.
 
-Absolute temperature, ordering, SoC range/rate, stuck, and stale checks remain
-binary and produce `VIOLATION` only.
+Absolute temperature, ordering, SoC range/rate, stuck, stale, and generation-gap
+checks remain binary and produce `VIOLATION` only. `max_generation_interval_ms`
+(150 ms) is the largest admissible source/generation interval Δτ between
+consecutive samples; a larger forward step in `timestamp_ms` raises
+`STREAM_GENERATION_GAP` (ADR-015).
 
 The thermal normalization points are validated against the admissible
 envelope: `absolute_min_c <= reference_c < hot_state_c <= absolute_max_c`.
@@ -61,6 +64,7 @@ reporter projects configured `DetectionClass × DetectionLevel` pairs:
 | `THERMAL_LIMIT / WARNING` | `BatteryOverTempWarning` |
 | `THERMAL_LIMIT / CRITICAL` | `BatteryOverTempCritical` |
 | `STREAM_STALE / VIOLATION` | `BatteryTempStreamStale` |
+| `STREAM_GENERATION_GAP / VIOLATION` | `BatteryTempGenerationGap` |
 | `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION` | `BatteryTempAbsoluteLimit` |
 | `PHYSICAL_TEMP_ORDERING / VIOLATION` | `BatteryTempOrdering` |
 | `PHYSICAL_TEMP_SPREAD / VIOLATION` | `BatteryTempSpread` |

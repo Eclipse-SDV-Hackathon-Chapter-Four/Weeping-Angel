@@ -180,7 +180,10 @@ impl BatteryRecord {
             format!("{:.6}", self.arrival_ms as f64 / 1_000.0),
         ));
         for (index, byte) in self.payload.iter().enumerate() {
-            replacements.push((self.token_spans[self.data_start + index], format!("{byte:02X}")));
+            replacements.push((
+                self.token_spans[self.data_start + index],
+                format!("{byte:02X}"),
+            ));
         }
         replacements.sort_by_key(|(span, _)| std::cmp::Reverse(span.0));
 

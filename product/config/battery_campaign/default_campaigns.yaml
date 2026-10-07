@@ -1,0 +1,16 @@
+schema_version: 1
+
+defaults:
+  scenarios: nominal
+  incidents: 5
+  schedule: even
+  variation: standard
+
+campaigns:
+  - signal.stuck
+  - signal.spike
+  - signal.drift
+  - signal.out_of_range
+  - transport.delay
+  - transport.drop
+  - source.dropout

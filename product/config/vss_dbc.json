@@ -11,6 +11,17 @@
             "type": "branch",
             "description": "...",
             "children": {
+              "SourceTimestamp": {
+                "datatype": "uint32",
+                "type": "sensor",
+                "description": "Source-relative generation timestamp",
+                "unit": "ms",
+                "dbc2vss": {
+                  "signal": "TimeStamp",
+                  "interval_ms": 50,
+                  "on_change": false
+                }
+              },
               "Temperature": {
                 "type": "branch",
                 "description": "...",
@@ -22,7 +33,7 @@
                     "unit": "celsius",
                     "dbc2vss": {
                       "signal": "CellTempAvg",
-                      "interval_ms": 100,
+                      "interval_ms": 50,
                       "on_change": false
                     }
                   },
@@ -33,7 +44,7 @@
                     "unit": "celsius",
                     "dbc2vss": {
                       "signal": "CellTempMax",
-                      "interval_ms": 100,
+                      "interval_ms": 50,
                       "on_change": false
                     }
                   },
@@ -44,7 +55,7 @@
                     "unit": "celsius",
                     "dbc2vss": {
                       "signal": "CellTempMin",
-                      "interval_ms": 100,
+                      "interval_ms": 50,
                       "on_change": false
                     }
                   }
@@ -61,7 +72,7 @@
                     "unit": "percent",
                     "dbc2vss": {
                       "signal": "StateOfCharge",
-                      "interval_ms": 100,
+                      "interval_ms": 50,
                       "on_change": false
                     }
                   }

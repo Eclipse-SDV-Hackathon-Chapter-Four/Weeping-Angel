@@ -9,6 +9,7 @@ pub const CANONICAL_SIGNALS: &[&str] = &["temp_min", "temp_avg", "temp_max", "so
 
 const DETECTION_CLASSES: &[&str] = &[
     "STREAM_STALE",
+    "STREAM_GENERATION_GAP",
     "THERMAL_LIMIT",
     "PHYSICAL_TEMP_ABSOLUTE_LIMIT",
     "PHYSICAL_TEMP_ORDERING",
@@ -102,6 +103,7 @@ pub struct SearchConfig {
     pub warning_target_utilization: f32,
     pub violation_target_utilization: f32,
     pub max_candidate_quanta: usize,
+    pub exact_parameters: bool,
 }
 
 impl Default for SearchConfig {
@@ -110,6 +112,7 @@ impl Default for SearchConfig {
             warning_target_utilization: 0.9,
             violation_target_utilization: 1.1,
             max_candidate_quanta: 64,
+            exact_parameters: false,
         }
     }
 }
@@ -209,9 +212,6 @@ impl GenerationRequest {
         }
         if self.search.violation_target_utilization <= 1.0 {
             bail!("search.violation_target_utilization must be greater than 1");
-        }
-        if self.generation_goal.primary.is_empty() {
-            bail!("generation_goal.primary must contain at least one observation");
         }
         let mut categories = BTreeMap::new();
         for (name, observations) in [

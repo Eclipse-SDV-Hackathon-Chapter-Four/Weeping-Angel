@@ -1,0 +1,25 @@
+schema_version: 1
+
+scenarios:
+  cold_nominal: product/tests/battery_campaign/scenarios/0_cold_nominal
+  warm_nominal: product/tests/battery_campaign/scenarios/1_warm_nominal
+  hot_nominal: product/tests/battery_campaign/scenarios/2_hot_nominal
+  overtemp_fault: product/tests/battery_campaign/scenarios/3_overtemp_fault
+  hotspot_fault: product/tests/battery_campaign/scenarios/4_hotspot_fault
+
+scenario_groups:
+  nominal: [cold_nominal, warm_nominal, hot_nominal]
+  regression: [overtemp_fault, hotspot_fault]
+
+campaign_files:
+  - default_campaigns.yaml
+  - combined_example.yaml
+
+output_dir: product/tests/battery_campaign/experiments
+
+execution:
+  readiness_timeout_ms: 10000
+  guardian_slack_ms: 100
+  dfm_slack_ms: 500
+  drain_ms: 3000
+  continue_after_infrastructure_error: true

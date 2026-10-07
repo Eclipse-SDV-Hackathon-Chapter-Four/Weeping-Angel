@@ -1,0 +1,26 @@
+{
+  "Vehicle": {
+    "type": "branch",
+    "description": "High-level vehicle data.",
+    "children": {
+      "Powertrain": {
+        "type": "branch",
+        "description": "Powertrain data for battery management, etc.",
+        "children": {
+          "TractionBattery": {
+            "type": "branch",
+            "description": "Battery Management data.",
+            "children": {
+              "SourceTimestamp": {
+                "datatype": "uint32",
+                "type": "sensor",
+                "description": "Source-relative generation timestamp (CAN TimeStamp of frame 0x100).",
+                "unit": "ms"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -52,6 +52,9 @@ guardian_fault_event:
     - observed
     - limit
     - residual
+    - utilization
+    - interval_ms      # source/generation interval Δτ of a temporal check
+    - timestamp_ms     # source timestamp of the causing sample (ADR-013)
 
 # Authoritative injection-side record emitted by the campaign/Fault Generator.
 # injected_class and mutations are copied from the executed injection instance

@@ -8,6 +8,10 @@ service VAL {
     rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
 }
 
+// Battery paths (product/config/vss_dbc.json), all under Vehicle.Powertrain.TractionBattery:
+//   SourceTimestamp        -> Datapoint.uint32 (CAN TimeStamp, ms; source generation time)
+//   Temperature.Average/Max/Min, StateOfCharge.Current -> Datapoint.float
+// Datapoint.timestamp is set by feeder/broker, not by the source.
 message SubscribeEntry {
     string         path   = 1;
     View           view   = 2;

@@ -21,13 +21,20 @@ pub struct DiagnosticKey {
 }
 
 /// The complete configured Guardian-to-DFM projection.
-pub const DFM_MAPPINGS: [(DiagnosticKey, &str); 11] = [
+pub const DFM_MAPPINGS: [(DiagnosticKey, &str); 12] = [
     (
         DiagnosticKey {
             class: DetectionClass::StreamStale,
             level: DetectionLevel::Violation,
         },
         "BatteryTempStreamStale",
+    ),
+    (
+        DiagnosticKey {
+            class: DetectionClass::StreamGenerationGap,
+            level: DetectionLevel::Violation,
+        },
+        "BatteryTempGenerationGap",
     ),
     (
         DiagnosticKey {
@@ -147,6 +154,12 @@ pub struct FaultEvidence {
     pub residual: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub utilization: Option<f32>,
+    /// Source/generation interval Δτ of a temporal check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u64>,
+    /// Source timestamp of the sample that caused the change (ADR-013).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
 }
 
 impl FaultEvidence {
@@ -157,6 +170,8 @@ impl FaultEvidence {
             limit: detection.limit,
             residual: detection.residual,
             utilization: detection.utilization,
+            interval_ms: detection.interval_ms,
+            timestamp_ms: detection.sample_timestamp_ms,
         }
     }
 }
@@ -189,6 +204,14 @@ impl FaultEvent {
         ] {
             if let Some(value) = value {
                 env.push((name.to_string(), format!("{value:.3}")));
+            }
+        }
+        for (name, value) in [
+            ("interval_ms", self.evidence.interval_ms),
+            ("timestamp_ms", self.evidence.timestamp_ms),
+        ] {
+            if let Some(value) = value {
+                env.push((name.to_string(), value.to_string()));
             }
         }
         env
@@ -254,6 +277,8 @@ mod tests {
             limit: active.then_some(2.0),
             residual: active.then_some(1.0),
             utilization: None,
+            interval_ms: None,
+            sample_timestamp_ms: None,
             detected_at: Instant::now(),
             active,
         }
@@ -307,6 +332,24 @@ mod tests {
             .is_none());
         assert_eq!(
             stage_of(faults.apply(&detection(class, level, Some(Signal::TempMax), false))),
+            Some(FaultStage::Passed)
+        );
+    }
+
+    #[test]
+    fn generation_gap_is_reported_as_failed_and_passed() {
+        let mut faults = FaultAggregator::default();
+        let (class, level) = (
+            DetectionClass::StreamGenerationGap,
+            DetectionLevel::Violation,
+        );
+        assert_eq!(fault_key(class, level), Some("BatteryTempGenerationGap"));
+        assert_eq!(
+            stage_of(faults.apply(&detection(class, level, None, true))),
+            Some(FaultStage::Failed)
+        );
+        assert_eq!(
+            stage_of(faults.apply(&detection(class, level, None, false))),
             Some(FaultStage::Passed)
         );
     }
@@ -375,6 +418,8 @@ mod tests {
                 limit: None,
                 residual: Some(0.25),
                 utilization: None,
+                interval_ms: Some(100),
+                timestamp_ms: Some(1_200),
             },
         };
         assert_eq!(
@@ -384,6 +429,8 @@ mod tests {
                 ("level".to_string(), "VIOLATION".to_string()),
                 ("observed".to_string(), "1.000".to_string()),
                 ("residual".to_string(), "0.250".to_string()),
+                ("interval_ms".to_string(), "100".to_string()),
+                ("timestamp_ms".to_string(), "1200".to_string()),
             ]
         );
     }

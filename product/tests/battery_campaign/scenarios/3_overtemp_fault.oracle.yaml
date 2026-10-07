@@ -1,0 +1,24 @@
+schema_version: 1
+scenario_id: overtemp_fault
+source_window_ms: { start: 0, end: 19900 }
+
+guardian:
+  allow_unspecified: false
+  transitions:
+    - class: PHYSICAL_TEMP_RATE
+      level: WARNING
+      state: active
+      signals: [temp_min, temp_avg, temp_max]
+      at_ms: { from: 600, through: 19800, every: 600 }
+    - class: PHYSICAL_TEMP_RATE
+      level: WARNING
+      state: cleared
+      signals: [temp_min, temp_avg, temp_max]
+      at_ms: { from: 700, through: 19900, every: 600 }
+    - { at_ms: 3000, class: THERMAL_LIMIT, level: WARNING, state: active, signal: temp_max }
+    - { at_ms: 15000, class: THERMAL_LIMIT, level: WARNING, state: cleared, signal: temp_max }
+    - { at_ms: 15000, class: THERMAL_LIMIT, level: CRITICAL, state: active, signal: temp_max }
+    - { at_ms: 15600, class: PHYSICAL_TEMP_ABSOLUTE_LIMIT, level: VIOLATION, state: active, signal: temp_max }
+
+dfm:
+  derive_from: product/config/battery_guardian/guardian_diagnostics.json

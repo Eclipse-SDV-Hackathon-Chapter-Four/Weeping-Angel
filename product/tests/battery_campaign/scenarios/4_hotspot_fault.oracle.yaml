@@ -1,0 +1,16 @@
+schema_version: 1
+scenario_id: hotspot_fault
+source_window_ms: { start: 0, end: 19900 }
+
+guardian:
+  allow_unspecified: false
+  transitions:
+    - { at_ms: 8000, class: PHYSICAL_TEMP_HOTSPOT, level: WARNING, state: active, signal: temp_max }
+    - { at_ms: 9000, class: PHYSICAL_TEMP_HOTSPOT, level: WARNING, state: cleared, signal: temp_max }
+    - { at_ms: 9000, class: PHYSICAL_TEMP_HOTSPOT, level: VIOLATION, state: active, signal: temp_max }
+    - { at_ms: 12500, class: PHYSICAL_TEMP_SPREAD, level: WARNING, state: active }
+    - { at_ms: 16000, class: PHYSICAL_TEMP_SPREAD, level: WARNING, state: cleared }
+    - { at_ms: 16000, class: PHYSICAL_TEMP_SPREAD, level: VIOLATION, state: active }
+
+dfm:
+  derive_from: product/config/battery_guardian/guardian_diagnostics.json

@@ -55,6 +55,7 @@ may be replaced by it.
 | nominal sample period | 100 ms | expected VSS/DBC cycle |
 | evaluation period | 100 ms | Guardian task period |
 | stale timeout $\tau_{\mathrm{stale}}$ | 500 ms | maximum age of the last valid sample |
+| maximum generation interval $\Delta\tau_{\max}$ | 150 ms | largest admissible source/generation interval (nominal 100 ms + tolerance) |
 | utilization warning threshold $u_{\mathrm{warning}}$ | 0.8 | warning fraction for continuous limits |
 
 For a continuous upper bound,
@@ -187,6 +188,7 @@ Canonical classes:
 
 ```text
 STREAM_STALE
+STREAM_GENERATION_GAP
 THERMAL_LIMIT
 PHYSICAL_TEMP_ABSOLUTE_LIMIT
 PHYSICAL_TEMP_ORDERING
@@ -416,14 +418,44 @@ raise `STREAM_STALE / VIOLATION`.
 
 Freshness is a property of the receive axis ($\Delta t^{\mathrm{recv}}$, projected
 relative now), not of the source/generation interval $\Delta\tau$. Freshness is
-checked periodically even without new input. Each received sample is physically evaluated at most once; the previous evaluated sample is retained for temporal checks.
+checked periodically even without new input. Received samples are queued and
+each one is physically evaluated exactly once, in arrival order, even when
+several arrive within one evaluation period; the previous evaluated sample is
+retained for temporal checks.
+
+### Generation gap (lost samples)
+
+Lost samples are visible on the source timeline (ADR-015). Let
+$ts_{\max}$ be the highest source timestamp evaluated so far. For a new sample,
+
+$$
+\Delta\tau_k=ts_k-ts_{\max},
+\qquad
+\Delta\tau_k>\Delta\tau_{\max}=150\,\mathrm{ms}
+$$
+
+raises `STREAM_GENERATION_GAP / VIOLATION` with evidence
+`observed` $=\Delta\tau_k$, `limit` $=\Delta\tau_{\max}$, `residual`
+$=\Delta\tau_k-\Delta\tau_{\max}$, `interval_ms` and the sample's
+`timestamp_ms`. The next sample on the nominal grid clears it (DFM
+`Failed` → `Passed`). The gapped sample is still evaluated physically; its
+dynamic checks use the actual $\Delta\tau_k$.
+
+- Non-increasing timestamps ($\Delta\tau_k\le0$) are never a gap; duplicate
+  and out-of-order detection is out of scope of ADR-015.
+- A sample whose timestamp lies behind $ts_{\max}$ while the stream is
+  `STREAM_STALE` is a source/replay restart: the sequence baseline, previous
+  sample and stuck window are reset, and no gap is raised.
+- A gap reveals missing generations but cannot tell whether they were lost at
+  the source or in transport.
 
 The Guardian observes only the symptom:
 
 ```text
-transport.delay  --\
-transport.drop   ---+--> STREAM_STALE
-source.dropout   --/
+transport.delay  -------------------> STREAM_STALE (delay > 500 ms)
+transport.drop   ---+---------------> STREAM_STALE (loss > 500 ms)
+                    \---------------> STREAM_GENERATION_GAP (any loss, on resume)
+source.dropout   -------------------> STREAM_STALE
 ```
 
 It does not infer the injected root cause.
@@ -438,10 +470,12 @@ For each new valid sample:
 2. check absolute bounds and ordering;
 3. evaluate spread and hotspot;
 4. if a previous sample exists, evaluate temperature and SoC rates using the source/generation interval $\Delta\tau_k$;
-5. update and evaluate the stuck window;
-6. emit detection state transitions and project configured class/level pairs to DFM.
+5. check the generation gap against $ts_{\max}$ (§8);
+6. update and evaluate the stuck window;
+7. emit detection state transitions and project configured class/level pairs to DFM.
 
-Malformed messages do not update model state or freshness.
+Malformed messages, including messages without `timestamp_ms`, do not update
+model state or freshness.
 
 ---
 
@@ -473,6 +507,7 @@ Injected faults are causes; Guardian detections are observations:
 | SoC `signal.out_of_range` | `PHYSICAL_SOC_RANGE` |
 | temperature `signal.stuck` | `SIGNAL_STUCK` |
 | `transport.delay/drop`, `source.dropout` | `STREAM_STALE` |
+| `transport.drop` | `STREAM_GENERATION_GAP` (also for losses shorter than the stale timeout) |
 | `signal.combination` | zero, one, or multiple detections |
 
 The Guardian must never infer the injected class.
@@ -485,6 +520,7 @@ The Guardian must never infer the injected class.
 guardian:
   evaluation_period_ms: 100
   missing_packet_timeout_ms: 500
+  max_generation_interval_ms: 150
 
   warning:
     utilization_threshold: 0.8

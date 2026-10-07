@@ -26,7 +26,8 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **Correlation (ADR-007).** `run_id` enters the Guardian via startup configuration;
   per-case correlation uses `injected_at_ms` + a time window in the Collector.
 - **v1 interface decisions:** mitigation M1 (event-only), DFM IPC = iceoryx2,
-  report = `verdict.json` → Markdown, transport faults = Toxiproxy (ADR-007).
+  report = `verdict.json` → Markdown, transport faults = ASC/CAN replay
+  mutation before the CAN Provider (ADR-010).
 
 ## 2. Component overview
 
@@ -41,11 +42,11 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 | C7 | Battery Thermal Guardian | [DEMO] | Physical model + evidence + DFM reporting. |
 | C8 | Diagnostic Fault Manager (DFM) | [DEMO] | Fault/DTC lifecycle store; serves `dfm/query`. |
 | C9 | OpenSOVD Gateway | [DEMO] | Exposes DFM faults as SOVD HTTP. |
-| C10 | Evidence Collector | [PLANNED] | Correlates ground truth + evidence + diagnostics → verdict. |
+| C10 | Evidence Collector | [PLANNED] | Correlates ground truth + evidence + diagnostics → verdict; hosts the feature-flagged live observer. |
 | C11 | Campaign Supervisor (openDuT) | [DEFERRED] | Orchestrates campaigns; remote reruns (v2). |
 | C12 | Ankaios | [DEFERRED] | Workload lifecycle / AutoSD run (v2). |
 | C13 | Test harness (Robot) | [DEMO] | Transitional driver until C10 exists. |
-| C14 | Transport fault injector (Toxiproxy) | [DEMO] | Injects delay/drop on the C5→C7 Zenoh link. |
+| C14 | CAN replay transport mutation | [DEMO] | Logical injection point in C2: changes ASC delivery timing or omits CAN frames. |
 | C15 | Mitigation Actuator (mock) | [DEFERRED] | Closed-loop mitigation (M2) — not in v1. |
 
 ## 3. Edge overview
@@ -68,8 +69,9 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 | E14 | C11 → C2 | orchestration | CLI/params | [DEFERRED] |
 | E15 | C11 ↔ C10 | orchestration | run metadata in, verdict out | [DEFERRED] |
 | E16 | C12 → C1…C13 | lifecycle | Ankaios manifest | [DEFERRED] |
-| E17 | C14 on E5/E6 | inline TCP proxy | Toxiproxy `:7448 → :7447` | [DEMO] |
+| E17 | C2/C14 → C3 | generated replay | ASC timing changes / omitted CAN FD frames | [DEMO] |
 | E18 | C13 → C2 | process spawn | legacy `fault_injector` (superseded by C2) | [DEMO] |
+| E19 | C10 → Browser | HTTP + SSE | `127.0.0.1:8090`, snapshot + deltas (ADR-016) | [PLANNED] |
 
 ## 4. Components (short specs)
 
@@ -106,7 +108,8 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **Detection classes:** `PHYSICAL_TEMP_ABSOLUTE_LIMIT`, `PHYSICAL_TEMP_ORDERING`,
   `PHYSICAL_TEMP_SPREAD`, `PHYSICAL_TEMP_HOTSPOT`, `PHYSICAL_TEMP_RATE`,
   `PHYSICAL_SOC_RANGE`, `PHYSICAL_SOC_RATE`, `SIGNAL_STUCK`, `STREAM_STALE`,
-  `STREAM_DUPLICATE`, `STREAM_REORDERED`.
+  `STREAM_GENERATION_GAP` (ADR-015); `STREAM_DUPLICATE`, `STREAM_REORDERED`
+  planned, not implemented.
 - **Mitigation (M1):** enters `MITIGATING` and emits an event; **no actuator**.
 - **Ordering guarantee:** emit evidence **before** the DFM write.
 - **`run_id`:** from startup configuration (ADR-007).
@@ -124,6 +127,7 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **Ambiguity:** `transport.delay`, `transport.drop`, `source.dropout` all → `STREAM_STALE`.
 - **Verdict:** tristate `PASS/FAIL/INCONCLUSIVE`; emits `verdict.json`, renders Markdown.
 - **Collector-only classes:** `DIAGNOSTIC_DFM_WRITE_DELAY`, `DIAGNOSTIC_SOVD_VISIBILITY_PARTIAL`.
+- **Live observer (ADR-016):** feature-flagged module + `--observer`; reads in-process state, serves embedded static SSE frontend on `127.0.0.1:8090` (E19). Read-only, not DoD-critical. Reuses the `battery-guardian` library for static bands and the ADR-013 relative time base. Contract: `product/doc/observer/live_observer.md`.
 
 ### C11 — Campaign Supervisor (openDuT) [DEFERRED]
 ### C12 — Ankaios [DEFERRED]
@@ -132,10 +136,14 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **I/O:** in E11, env; out E18, report files. Encodes the target contract in
   `product/tests/battery_guardian.robot`.
 
-### C14 — Transport fault injector (Toxiproxy) [DEMO]
-- **I/O:** inline on E5/E6, control API `:8474`. Toxics: `timeout` (drop),
-  `latency` (delay). Reorder is **not** natively supported — needs a custom
-  toxic/mutator (open).
+### C14 — CAN replay transport mutation [DEMO]
+- **Form:** logical injection point implemented by C2, not a separate process.
+- **Delay:** modifies ASC replay timestamps while preserving the CAN payload's
+  source-generation timestamp.
+- **Drop:** omits selected CAN FD records without rebasing later timestamps.
+- **Boundary:** no mutation is applied to the uProtocol/Zenoh link. Source
+  dropout remains a distinct ground-truth cause even where the resulting ASC
+  gap is observationally identical.
 
 ## 5. Channels and payloads
 
@@ -285,10 +293,10 @@ Guardian additionally emits `PHYSICAL_TEMP_RATE` evidence and raises
 | `signal.spike` | C2 (ASC) | `PHYSICAL_TEMP_RATE` | in-range spike; may also trip spread/hotspot |
 | `signal.drift` | C2 (ASC) | `PHYSICAL_TEMP_SPREAD`, `PHYSICAL_TEMP_HOTSPOT` | stays under rate bound |
 | `signal.out_of_range` | C2 (ASC) | `PHYSICAL_TEMP_ABSOLUTE_LIMIT` | distinct from DBC range |
-| `transport.delay` | C14 Toxiproxy `latency` | `STREAM_STALE` | ambiguous root cause |
-| `transport.drop` | C14 Toxiproxy `timeout`/`down` | `STREAM_STALE` | ambiguous root cause |
-| `transport.duplicate` | C14 (duplicate toxic) | `STREAM_DUPLICATE` | via source-timestamp identity |
-| `transport.reorder` | **deferred (v1 out)** | `STREAM_REORDERED` (deferred) | Toxiproxy has no native reorder |
+| `transport.delay` | C2/C14 ASC replay-time shift | `STREAM_STALE` | payload source timestamp unchanged; ambiguous root cause |
+| `transport.drop` | C2/C14 CAN-frame omission | `STREAM_STALE`, `STREAM_GENERATION_GAP` | later timestamps unchanged → gap on resume (ADR-015); root cause still ambiguous |
+| `transport.duplicate` | C2/C14 frame duplication | `STREAM_DUPLICATE` | deferred from implemented Mutator scope |
+| `transport.reorder` | **deferred (v1 out)** | `STREAM_REORDERED` (deferred) | no canonical v1 replay operator |
 | `source.dropout` | replay stop | `STREAM_STALE` | ambiguous root cause |
 | `source.replay_interruption` | replay stop | `STREAM_STALE` | ambiguous root cause |
 | `diagnostics.dfm_write_delay` | DFM fault injection | `DIAGNOSTIC_DFM_WRITE_DELAY` | Collector-class, not Guardian |
@@ -307,7 +315,7 @@ Guardian additionally emits `PHYSICAL_TEMP_RATE` evidence and raises
 | C4 Data Broker (down) | no `BatteryTempEvent`, `STREAM_STALE` | `INCONCLUSIVE` (root cause below Guardian) |
 | C3 CAN Provider (down) | no `BatteryTempEvent`, `STREAM_STALE` | `INCONCLUSIVE` |
 | C6 Zenoh (unreachable) | no delivery end-to-end | `INCONCLUSIVE` |
-| C14 Toxiproxy (misconfig) | unintended transport fault | config error, not a verdict |
+| C2/C14 replay mutation (invalid) | malformed or unintended CAN transport fault | generation error, no experiment emitted |
 
 ## 9. Resolved / deferred decisions
 
@@ -320,11 +328,11 @@ Guardian additionally emits `PHYSICAL_TEMP_RATE` evidence and raises
 | DFM IPC | iceoryx2 | ADR-007 |
 | `run_id` | Startup config + per-case time window | ADR-007 |
 | Report | `verdict.json` → Markdown | ADR-007 |
-| Transport faults | Toxiproxy | ADR-007 |
+| Transport faults | ASC/CAN replay mutation before CAN Provider | ADR-010 |
 | Fault-class registry | Contract YAML + model doc authoritative | ADR-005 |
 | `HighTempAlert` (0x9003) | Deleted | decision Q9 |
 | C15 mitigation actuator | Deferred | ADR-007 |
-| Reorder injection | Deferred for v1 (no native Toxiproxy toxic) | ADR-009 |
+| Reorder injection | Deferred for v1 (no canonical replay operator) | ADR-009 |
 | `GuardianEvidenceEvent` URI/RID | `//guardian-vss/9000/1/9002` (reuse 0x9002) | ADR-009 |
 
 ## 10. Remaining work
