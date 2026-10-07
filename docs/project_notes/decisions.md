@@ -402,3 +402,34 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
   replay-relative timestamp; mechanism TBD); DFM/collector projection onto the
   base.
 - Memory: update `key_facts.md` timing facts and the `issues.md` work item.
+
+### ADR-014: Pre-generated multi-incident battery campaign harness without hashes (2026-10-07)
+
+**Context:**
+- The Case Mutator can generate and forward-verify individual mutations, but the system-level campaign needs stable replay inputs that exercise operating-state dependence and repeated detection/clear cycles.
+- A later runner must execute one replay at a time and let the Evidence Collector compare incoming battery messages, original Guardian decisions, and DFM/OpenSOVD visibility.
+- Artifact and configuration hashes add machinery that is not needed for this harness.
+
+**Decision:**
+- The harness uses five version-controlled, 20-second reference scenarios at the nominal 100-ms battery-message cycle: `cold_nominal`, `warm_nominal`, `hot_nominal`, `overtemp_fault`, and `hotspot_fault`.
+- Initial elementary-fault campaigns use the three nominal scenarios as mutation templates. The two genuine-fault scenarios run unmodified as positive regression experiments; combined faults based on them require a later explicit specification.
+- One campaign represents one canonical injected fault class. For each applicable reference scenario it pre-generates one experiment ASC containing five temporally separated incidents of that class, with recovery intervals sufficient to observe both activation and clearing.
+- Each incident has independent injection ground truth and Guardian/DFM expectations. Different incident strengths test meaningful boundaries and levels, but a `WARNING` expectation is used only for Guardian rules that define warning semantics. Binary rules never acquire synthetic warning levels.
+- Generation and execution remain separate phases. Generation emits the ASC replay, ground truth, and oracle before system execution. A future runner resets the system, starts evidence capture, replays exactly one experiment, allows a drain period, and produces a tri-state `PASS` / `FAIL` / `INCONCLUSIVE` verdict.
+- Campaign artifacts do not contain model hashes, configuration hashes, trace hashes, artifact hashes, or a dedicated provenance file. Stable IDs, explicit paths, committed specifications, and the generated artifacts themselves provide the required traceability.
+- The detailed harness contract, decided points, and open questions live in `product/doc/testing/battery_campaign_test_harness.md`.
+
+**Alternatives Considered:**
+- Generate mutations just in time during every system run → Rejected: generation failures and system failures would be mixed, and the exact replay would be harder to inspect before execution.
+- Treat all five reference scenarios as general mutation templates → Rejected for the initial harness: pre-existing overtemperature or hotspot observations would obscure elementary-fault expectations.
+- Require warning and violation incidents for every injected class → Rejected: Stuck, Stale, Ordering, Absolute Limit, SoC Range, and SoC Rate are binary Guardian checks.
+- Add hashes and a provenance sidecar to every experiment → Rejected: unnecessary complexity for the intended repository-controlled workflow.
+
+**Consequences:**
+- ✅ Generated experiments can be reviewed and replayed independently of the live system.
+- ✅ Repeated activation and clearing are exercised in one bounded replay.
+- ✅ Operating-state dependence is covered without conflating injected and pre-existing faults.
+- ✅ Evidence comparison remains separated into source input, Guardian decision, and diagnostic projection.
+- ❌ The Mutator must be extended from one injection to an ordered incident sequence.
+- ❌ Exact trajectories, incident schedules, campaign applicability, reset behavior, and runner technology remain to be agreed.
+- ❌ The current Mutator's emitted model hash must be removed when its output is aligned with this decision.
