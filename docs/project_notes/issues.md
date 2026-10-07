@@ -91,3 +91,8 @@ is not authoritative) — they do not become open issues here.
 - **Status**: Resolved
 - **Description**: `product/config/battery_temp_with_ts.asc` converted to canonical CAN FD lines with DLC code `0xA` and 16-byte payload; Classic CAN replay was cut to 8 bytes by python-can, losing `CellTempMin` and `StateOfCharge`. The Case Mutator parses/renders both line formats while product replays use CAN FD.
 - **Notes**: Replay via `product/components/start_can.sh` delivers all four signals; mutator and collector tests pass. The implemented format is now normative in `product/doc/can/battery_can_fd_replay.md`. Collector reads the mutator's `<stem>.ground_truth.yaml` and its `source_started_at_ms`/`source_finished_at_ms` window.
+
+### 2026-10-07 - Specify live scenario observer for the Evidence Collector
+- **Status**: Resolved
+- **Description**: Added `product/doc/observer/live_observer.md` and ADR-016: a read-only Live Scenario Observer as a feature-flagged module (`observer`, `--observer`) inside the Evidence Collector binary, fed from in-process state and served to the browser via HTTP + SSE on `127.0.0.1:8090` with embedded static assets.
+- **Notes**: Uses only present data — battery stream and mapped `GuardianFaultEvent` (`//guardian/1001/1/8001`) — plus the ADR-014 bundle (`ground_truth.yaml`, `oracle.yaml`); reuses the `battery-guardian` library for static bands; relative-time axis per ADR-013. Not DoD-critical. Known v1 limits: unmapped Guardian warnings invisible (bug logged) and step-after dynamic limits. Follow-ups: ADR-012 amendment for `oracle.yaml`, raw decision stream (ADR-007), `key_facts.md`/`components_and_channels.md`/E19 updated.

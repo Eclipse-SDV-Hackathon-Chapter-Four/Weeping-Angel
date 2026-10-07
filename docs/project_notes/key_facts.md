@@ -89,6 +89,7 @@ Never store credentials here — this file is committed to git.
 - Subscribes directly to `battery-vss/9001/1/9001` and receives the same BatteryTempEvent payloads, including zero-based `timestamp_ms`, as the Guardian
 - Subscribes to the raw `GuardianEvidenceEvent` stream and receives every original Guardian decision, including decisions omitted from or aggregated by the DFM projection; its URI/RID remains to be fixed in the interface contract
 - Correlates source battery input, original Guardian decisions, injection ground truth, and DFM/OpenSOVD visibility; the direct subscriptions do not replace the diagnostic chain
+- Live Scenario Observer: feature-flagged module (`observer`) plus CLI option `--observer` inside the collector binary; serves a read-only static SSE frontend from in-process collector state (ADR-016, `product/doc/observer/live_observer.md`)
 
 ## CAN Assets (`demo/can/`)
 
@@ -105,6 +106,7 @@ Never store credentials here — this file is committed to git.
 ## Ports (legacy demo)
 
 - 7447 Zenoh (uProtocol bus) · 7448 Toxiproxy(zenoh) · 7690 OpenSOVD gateway · 8080 Guardian HTTP (`/health`, `/state`) · 8474 Toxiproxy API · 55555 kuksa-databroker
+- 8090 Live Scenario Observer HTTP/SSE (`127.0.0.1`, ADR-016), only when the collector runs with `--observer`
 
 ## Fault Catalog (`demo/diagnostics/catalog/battery_guardian.json`)
 

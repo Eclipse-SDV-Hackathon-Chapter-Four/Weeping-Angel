@@ -45,6 +45,11 @@ BIN_MUTATOR="$TARGET/case_mutator/target/debug/case-mutator"
 
 TOOLS_DIR="$REPO_DIR/tools"   # service start scripts live here (moved out of components/)
 
+# Python environment for the CAN replay (dbcfeeder: python-can, cantools,
+# kuksa-client). Self-provisioned when missing, mirroring the devcontainer
+# post-create convention ($HOME/.venv).
+E2E_VENV="${E2E_VENV:-$HOME/.venv}"
+
 CONFIG_DIR="$PRODUCT_DIR/config/battery_guardian"
 NOMINAL_ASC="$PRODUCT_DIR/config/battery_temp_with_ts.asc"
 CASES_DIR="$COMPONENT_DIR/cases"
@@ -176,12 +181,29 @@ prepare_case() { # <name>
   [ "$missing" = 0 ] || die "case '$1' artifacts incomplete"
 }
 
+ensure_python_env() {
+  local py="$E2E_VENV/bin/python"
+  if [ ! -x "$py" ] || ! "$py" -c "import cantools, can" >/dev/null 2>&1; then
+    log "setting up the replay python environment in $E2E_VENV"
+    if [ ! -x "$py" ]; then
+      python3 -m venv "$E2E_VENV" >&2
+    fi
+    "$E2E_VENV/bin/pip" install --quiet \
+      -r "$REPO_DIR/.devcontainer/requirements.txt" \
+      -r "$REPO_DIR/product/components/kuksa-can-provider/requirements.in" >&2
+  fi
+  export PATH="$E2E_VENV/bin:$PATH"
+  "$E2E_VENV/bin/python" -c "import cantools, can" 2>/dev/null \
+    || die "replay python environment incomplete (see $E2E_VENV, install cantools/python-can/kuksa-client)"
+}
+
 # ---------------------------------------------------------------------------
 # Infrastructure (started once, shared across cases)
 # ---------------------------------------------------------------------------
 INFRA_PIDS=()
 
 start_infra() {
+  ensure_python_env
   log "starting zenoh router"
   "$TOOLS_DIR/start_zenohd.sh" >&2
   wait_port 7447 "zenohd" 15
@@ -289,7 +311,7 @@ run_case() { # <name> <prefix_abs> <case_dir>
 
   log "case $name: replaying ${prefix}.asc"
   "$TOOLS_DIR/start_can.sh" "${prefix}.asc" >"$case_dir/replay.log" 2>&1 \
-    || warn "case $name: replay reported an error (see replay.log)"
+    || warn "case $name: replay reported an error (see $case_dir/replay.log)"
 
   log "case $name: waiting for collector verdict (drain ${E2E_IDLE_TIMEOUT_S}s)"
   local waited=0 verdict="" timed_out=0

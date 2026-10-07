@@ -19,6 +19,10 @@ Status: transitional one-command runner for **golden runs** (baseline +
 specified separately; this script deliberately keeps cases as data so it can
 grow into that runner without a rewrite.
 
+The runner provisions its own Python venv for the CAN replay (`$HOME/.venv`,
+override via `E2E_VENV`) when missing — the devcontainer `post-create` step
+having run or not does not matter.
+
 ## Usage
 
 Inside the dev container:
@@ -56,6 +60,7 @@ Exit code: `0` only if every case verdict is `PASS`; `1` otherwise
 | `E2E_CASE_TIMEOUT_S` | `240` | Hard deadline per case for the collector |
 | `E2E_REBUILD` | `0` | `1` = rebuild all binaries before the run |
 | `E2E_REGEN_CASES` | `0` | `1` = regenerate mutator-generated case artifacts |
+| `E2E_VENV` | `$HOME/.venv` | Python venv used for the CAN replay; created + populated by the runner when missing (mirrors the devcontainer `post-create` convention) |
 
 ## Component arguments (as used by the runner)
 
