@@ -69,12 +69,10 @@ es.addEventListener('detection', e => {
   schedule();
 });
 
+const LEVEL_COLORS = { WARNING: '#e5c07b', VIOLATION: '#e06c75', CRITICAL: '#c678dd' };
+
 function levelColor(level) {
-  switch ((level || '').toUpperCase()) {
-    case 'CRITICAL': return '#c678dd';
-    case 'VIOLATION': return '#e06c75';
-    default: return '#e5c07b';
-  }
+  return LEVEL_COLORS[(level || '').toUpperCase()] || LEVEL_COLORS.WARNING;
 }
 
 function draw() {
@@ -189,15 +187,46 @@ function draw() {
   }
 }
 
+// Legend: makes the injected ground truth vs. the observed Guardian
+// detections explicit, and explains the detection line style (ADR-016).
+const legendGroups = [
+  {
+    title: 'Signals',
+    items: [
+      { cls: 'line', color: '#61afef', label: 'temp_min' },
+      { cls: 'line', color: '#98c379', label: 'temp_avg' },
+      { cls: 'line', color: '#e5c07b', label: 'temp_max' },
+      { cls: 'line', color: '#56b6c2', label: 'SoC' },
+    ],
+  },
+  {
+    title: 'Injected (ground truth)',
+    items: [
+      { cls: 'window', color: '#61afef', label: 'incident window' },
+    ],
+  },
+  {
+    title: 'Detected by Guardian',
+    items: [
+      { cls: 'vline', color: LEVEL_COLORS.WARNING, label: 'WARNING' },
+      { cls: 'vline', color: LEVEL_COLORS.VIOLATION, label: 'VIOLATION' },
+      { cls: 'vline', color: LEVEL_COLORS.CRITICAL, label: 'CRITICAL' },
+    ],
+  },
+  {
+    title: 'Detection stage',
+    items: [
+      { cls: 'vline', color: '#8b93a1', label: 'solid = Failed (active)' },
+      { cls: 'vline dashed', color: '#8b93a1', label: 'dashed = Passed (cleared)' },
+    ],
+  },
+];
 const legend = document.getElementById('legend');
-legend.innerHTML = [
-  ['#e5c07b', 'temp_max / WARNING'],
-  ['#98c379', 'temp_avg'],
-  ['#61afef', 'temp_min / incident'],
-  ['#56b6c2', 'SoC'],
-  ['#c678dd', 'CRITICAL'],
-  ['#e06c75', 'VIOLATION'],
-].map(([c, label]) => `<span><span class="swatch" style="background:${c}"></span>${label}</span>`).join('');
+legend.innerHTML = legendGroups.map(g => [
+  `<span class="legend-group"><span class="legend-title">${g.title}</span>`,
+  ...g.items.map(it => `<span class="legend-item"><span class="swatch ${it.cls}" style="--c:${it.color}"></span>${it.label}</span>`),
+  '</span>',
+].join('')).join('');
 
 window.addEventListener('resize', schedule);
 draw();

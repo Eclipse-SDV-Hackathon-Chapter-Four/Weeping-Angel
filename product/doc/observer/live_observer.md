@@ -183,6 +183,10 @@ library — never re-derived by hand or in the frontend (ADR-005):
 - Oracle lane: required/allowed/forbidden expectations per incident; a
   provisional in-window match indicator may be shown, clearly marked as
   live/provisional.
+- Legend: must disambiguate the two planes — the **injected** ground-truth
+  incident window (blue box) from the **observed** Guardian detections (colored
+  vertical lines) — and the detection line style: solid = `stage: Failed`
+  (active), dashed = `stage: Passed` (cleared).
 
 ## 9. CLI and feature flag
 

@@ -35,8 +35,33 @@ footer {
   color: var(--muted);
   font-size: 12px;
   display: flex;
-  gap: 1rem;
+  align-items: center;
+  gap: 1.25rem;
   flex-wrap: wrap;
   border-top: 1px solid #2a2f38;
 }
-.swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: middle; }
+.legend-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-right: 1.25rem;
+  border-right: 1px solid #2a2f38;
+}
+.legend-group:last-child { border-right: none; padding-right: 0; }
+.legend-title {
+  color: #5c6472;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.swatch { display: inline-block; box-sizing: border-box; border-radius: 2px; }
+.swatch.line { width: 16px; height: 0; border-top: 2px solid var(--c); }
+.swatch.vline { width: 0; height: 14px; border-left: 2px solid var(--c); border-radius: 0; }
+.swatch.vline.dashed { border-left-style: dashed; }
+.swatch.window {
+  width: 16px;
+  height: 12px;
+  background: rgba(97, 175, 239, 0.12);
+  border: 1px solid rgba(97, 175, 239, 0.5);
+}

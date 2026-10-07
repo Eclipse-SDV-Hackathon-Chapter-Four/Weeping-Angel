@@ -9,6 +9,11 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
+### 2026-10-07 - Live observer legend disambiguates injected vs. observed faults
+- **Status**: Resolved
+- **Description**: Reworked the embedded Live Scenario Observer legend (`src/observer/app.js`, `style.css`): grouped into Signals / Injected (ground truth) / Detected by Guardian / Detection stage. The injected ground-truth incident window (blue box) is now separated from the observed Guardian detections (colored vertical lines), and the line style is explained — solid = `stage: Failed` (active), dashed = `stage: Passed` (cleared). Removed the ambiguous `temp_max / WARNING` and `temp_min / incident` entries; `LEVEL_COLORS` is now shared by the plot and the legend.
+- **Notes**: Static-asset-only change; embedded via `include_str!` (no Rust API change). `app.js` passes `node --check`; legend HTML output verified. Updated `live_observer.md` §8 with the legend requirement.
+
 ### 2026-10-07 - Map CAN TimeStamp into VSS (SourceTimestamp)
 - **Status**: In Progress
 - **Description**: `product/config/vss_dbc.json` maps the DBC `TimeStamp` to `Vehicle.Powertrain.TractionBattery.SourceTimestamp` (`uint32`, ms); `val.proto` documents it as `Datapoint.uint32`; `product/config/vss_overlay.json` is loaded by `tools/start_databroker.sh`. `vss_bridge` now sets `timestamp_ms` from `SourceTimestamp` (one event per frame, incomplete samples dropped and logged) instead of `now_ms()`.
