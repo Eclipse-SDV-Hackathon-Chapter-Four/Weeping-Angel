@@ -14,11 +14,14 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
   documented only (ADR-006).
 - **Authority.** README (DoD) = acceptance; ADRs = binding. Canonical fault-class
   registry: `product/interfaces/battery_fault_contract.yaml` + `battery_guardian_model.md`
-  (ADR-008); demo catalog superseded.
-- **Time base (ADR-004, supersedes ADR-001).** No sequence numbers anywhere. Fault
-  detection uses **receiver-side timestamps, freshness timeouts and per-sample
-  deltas** (100 ms grid); no heartbeat. The **source timestamp** in the message is
-  used *only as message identity* for duplicate/reorder — never as time base.
+  (ADR-005); demo catalog superseded.
+- **Time base (ADR-013, supersedes ADR-008 and the receive-time base of ADR-004).**
+  No sequence numbers anywhere. The zero-based source-relative `timestamp_ms` is
+  the pipeline-wide common time base and is carried unchanged through every
+  component. The model distinguishes the **source/generation interval** `Δτ`
+  (rate, thermal/SoC dynamics) from the **receive interval** `Δt_recv` projected
+  onto the same base (freshness/age, drop/jitter, duplicate/reorder); they share
+  one axis but are different quantities.
 - **Units.** `T` in °C, `SoC` in `pp`, `Δt = 100 ms`, `q_T = 0.5 °C`, `q_SoC = 0.5 pp`.
 - **Correlation (ADR-007).** `run_id` enters the Guardian via startup configuration;
   per-case correlation uses `injected_at_ms` + a time window in the Collector.
@@ -163,7 +166,7 @@ Existing components follow a fixed pattern; new channels must fit it:
   "timestamp_ms": 1759718400000
 }
 ```
-- `timestamp_ms` = source timestamp: **identity only** (duplicate/reorder), not time base.
+- `timestamp_ms` = source-relative generation time: the common time base (ADR-013). Its differences give the source/generation interval `Δτ` used by the model; arrival/freshness uses the receive interval projected onto the same base.
 
 ### E7/E12 — `GuardianEvidenceEvent` (`//guardian-vss/9000/1/9002`, JSON)
 Emitted on every fault-state transition (model doc §10):
@@ -308,7 +311,7 @@ Guardian additionally emits `PHYSICAL_TEMP_RATE` evidence and raises
 
 | Item | Decision | ADR |
 |---|---|---|
-| Time base / identity | Source timestamp = identity; receive-timeout detection; no seq-nr | ADR-004 |
+| Time base / identity | Relative `timestamp_ms` common base; `Δτ` (source) vs. `Δt_recv` (receive, projected); no seq-nr | ADR-013 |
 | DFM | Reinstated in chain | ADR-005 |
 | v1 scope | Full single-host chain; openDuT/Ankaios documented only | ADR-006 |
 | Mitigation | M1 event-only (no actuator) | ADR-007 |
@@ -316,7 +319,7 @@ Guardian additionally emits `PHYSICAL_TEMP_RATE` evidence and raises
 | `run_id` | Startup config + per-case time window | ADR-007 |
 | Report | `verdict.json` → Markdown | ADR-007 |
 | Transport faults | Toxiproxy | ADR-007 |
-| Fault-class registry | Contract YAML + model doc authoritative | ADR-008 |
+| Fault-class registry | Contract YAML + model doc authoritative | ADR-005 |
 | `HighTempAlert` (0x9003) | Deleted | decision Q9 |
 | C15 mitigation actuator | Deferred | ADR-007 |
 | Reorder injection | Deferred for v1 (no native Toxiproxy toxic) | ADR-009 |

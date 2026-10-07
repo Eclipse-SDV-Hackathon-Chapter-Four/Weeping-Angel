@@ -33,7 +33,7 @@ flowchart
         VSS["VSS uProtocol Service"]
 
         KUKSA_CAN -->|"Socket CAN"| KUKSA_DB
-        KUKSA_DB -->|"IP? VSS"| VSS
+        KUKSA_DB -->|"gRPC VSS"| VSS
     end
 
 
@@ -67,7 +67,7 @@ flowchart
 
     ZENOH -->|"TCP/IP, BPM"| VSS
 
-    ZENOH -->|"BPM, fault/ok"| EVIDENCE
+    ZENOH -->|"uProtocol pub/sub<br/>BPM, GuardianEvidenceEvent"| EVIDENCE
 
     JSON -->|"open()"| EVIDENCE
 
