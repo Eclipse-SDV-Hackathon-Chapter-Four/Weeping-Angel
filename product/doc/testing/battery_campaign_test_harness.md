@@ -47,6 +47,9 @@ product/config/battery_guardian/fault_injection_model.yaml
 
 product/config/battery_guardian/guardian_diagnostics.json
     Guardian-to-DFM projection
+
+product/doc/can/battery_can_fd_replay.md
+    product CAN FD payload and Vector ASC representation
 ```
 
 The harness must not redefine any of those semantics.
@@ -92,7 +95,8 @@ There are five reference scenarios. Every scenario:
 - uses the nominal 100-ms generation cycle;
 - contains 200 battery frames, beginning at source timestamp `0` ms and ending
   at `19_900` ms;
-- uses CAN frame `0x100`, DLC 16, and the canonical product DBC encoding;
+- uses CAN FD frame `0x100`, DLC code `0xA`, a 16-byte payload, and the
+  canonical product DBC/ASC encoding;
 - has an explicit baseline oracle;
 - is directly replayable without mutation.
 
@@ -425,6 +429,7 @@ rules:
 - do not classify missing evidence as a Guardian failure;
 - do not weaken or auto-expand required/allowed/forbidden oracle sets;
 - preserve the 20-second duration and five-incident structure;
+- emit product frame `0x100` only in the canonical CAN FD ASC form;
 - surface an unsatisfied timing or model constraint as `UNSATISFIABLE` or an
   open design issue rather than silently changing the campaign.
 

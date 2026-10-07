@@ -32,8 +32,8 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 
 | ID | Component | Status | Responsibility (one line) |
 |----|-----------|--------|---------------------------|
-| C1 | Source asset (ASC case) | [DEMO] | Replayable CAN frame file; the campaign artifact. |
-| C2 | Case Mutator / Fault Injector | [DEMO] | Mutates ASC template → fault cases + ground-truth sidecar. |
+| C1 | Source asset (ASC case) | [DEMO] | Replayable CAN FD frame file; the campaign artifact. |
+| C2 | Case Mutator / Fault Injector | [DEMO] | Mutates CAN FD ASC template → replay, ground truth, and oracle. |
 | C3 | KUKSA CAN Provider | [DEMO] | Replays ASC, decodes DBC, maps to VSS, writes Data Broker. |
 | C4 | KUKSA Data Broker | [DEMO] | VSS signal tree; gRPC reads/subscriptions. |
 | C5 | VSS uProtocol Publisher (`vss_bridge`) | [DEMO] | Data Broker → uProtocol/Zenoh `BatteryTempEvent`. |
@@ -52,8 +52,8 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 
 | ID | From → To | Channel | Protocol / addressing | Status |
 |----|-----------|---------|-----------------------|--------|
-| E1 | C2 → C1 | file write | mutated `.asc` + `.json` sidecar | [DEMO] |
-| E2 | C1 → C3 | file replay | `--dumpfile` (CAN 0x100, 100 ms) | [DEMO] |
+| E1 | C2 → C1 | file write | mutated `.asc` + YAML ground truth/oracle | [DEMO] |
+| E2 | C1 → C3 | file replay | `--dumpfile` (CAN FD 0x100, 16 B, 100 ms) | [DEMO] |
 | E3 | C3 → C4 | service call | gRPC `kuksa.val.v1.Val` :55555 | [DEMO] |
 | E4 | C4 → C5 | subscribe | gRPC `Subscribe` (VSS paths) | [DEMO] |
 | E5 | C5 → C6 | publish | uProtocol `//battery-vss/9001/1/9001` (JSON) | [DEMO] |
@@ -64,7 +64,7 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 | E10 | C9 ↔ C8 | req/resp | iceoryx2 `dfm/query` | [DEMO] |
 | E11 | C9 → C10/C13 | service call | SOVD HTTP/JSON `:7690/sovd/v1/apps/{app}/faults` | [DEMO] |
 | E12 | C6 → C10 | subscribe | uProtocol `GuardianEvidenceEvent` | [PLANNED] |
-| E13 | C2 → C10 | file read | ground-truth sidecar JSON | [PLANNED] |
+| E13 | C2 → C10 | file read | ground-truth sidecar YAML | [PLANNED] |
 | E14 | C11 → C2 | orchestration | CLI/params | [DEFERRED] |
 | E15 | C11 ↔ C10 | orchestration | run metadata in, verdict out | [DEFERRED] |
 | E16 | C12 → C1…C13 | lifecycle | Ankaios manifest | [DEFERRED] |
@@ -74,14 +74,16 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 ## 4. Components (short specs)
 
 ### C1 — Source asset (ASC case)
-- **I/O:** in E1; out E2. Vector ASC, `BO_ 256 BatteryTemperature` (0x100, 8 B,
-  100 ms), fields CellTempAvg/Max/Min/SoC. DBC ranges are encoding, not physical limits.
+- **I/O:** in E1; out E2. Vector ASC with CAN FD `BO_ 256 BatteryTemperature`
+  (0x100, DLC code `0xA`, 16-byte payload, 100 ms). The normative payload and
+  ASC form are defined in `product/doc/can/battery_can_fd_replay.md`.
 
 ### C2 — Case Mutator / Fault Injector
-- **I/O:** in E14 (v2); out E1 (`.asc`), E13 (`.json`). Deterministic (byte-identical).
-- **Implemented:** `overtemperature`; other classes fail-closed stubs.
+- **I/O:** in E14 (v2); out E1 (`.asc`), E13 (`.ground_truth.yaml`,
+  `.oracle.yaml`). Deterministic for identical inputs.
+- **Implemented:** all eight canonical v1 injected classes.
 - **Ground truth:** `run_id`, `injection_id`, `injected_class`, `injected_at_ms`, and executed mutation parameters. Campaign artifacts do not carry file or configuration hashes.
-- **Notes:** no sequence numbers. Value/signal classes only.
+- **Notes:** no sequence numbers; canonical product output remains CAN FD.
 
 ### C3 — KUKSA CAN Provider
 - **I/O:** in E2; out E3. Config `DBC_FILE`, `MAPPING_FILE`, `CANDUMP_FILE`, `KUKSA_ADDRESS/PORT`. "just use".

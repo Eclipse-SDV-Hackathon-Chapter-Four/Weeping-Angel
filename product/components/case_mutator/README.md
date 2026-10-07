@@ -5,6 +5,10 @@ The component implements the inverse-model case generation specified in
 frames, forward-verifies candidates with the real `battery-guardian` model,
 and emits three artifacts:
 
+The canonical product replay uses CAN FD frame `0x100`, DLC code `0xA`, and a
+16-byte payload as specified in
+`product/doc/can/battery_can_fd_replay.md`.
+
 - `<injection-id>.asc`
 - `<injection-id>.ground_truth.yaml`
 - `<injection-id>.oracle.yaml`
