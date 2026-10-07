@@ -154,7 +154,7 @@ at_ms: { from: 600, through: 19800, every: 600 }
 The DFM expectation is derived from `guardian_diagnostics.json`; unmapped
 Guardian transitions remain `NOT_APPLICABLE` on that plane.
 
-`golden_scenarios/validation.json` remains a derived per-frame summary for
+`product/tests/battery_campaign/scenarios/validation.json` remains a derived per-frame summary for
 human review. It is not the Collector oracle and must not replace the transition
 YAMLs.
 
@@ -368,10 +368,10 @@ product/tests/battery_campaign/
           dfm/
 ```
 
-The Golden Scenario files currently remain in the Case Mutator directory until
-the harness implementation moves them. `harness.yaml` maps each scenario ID to
-one prefix; `.asc`, `.ground_truth.yaml`, and `.oracle.yaml` are appended to
-that prefix. This is also the prefix passed to the Evidence Collector.
+The Golden Scenario files live in the target `scenarios/` directory.
+`harness.yaml` maps each scenario ID to one prefix; `.asc`,
+`.ground_truth.yaml`, and `.oracle.yaml` are appended to that prefix. This is
+also the prefix passed to the Evidence Collector.
 
 The common `case` prefix deliberately matches the current Evidence Collector
 interface: given `<experiment-dir>/case`, it finds `case.asc` and
@@ -709,15 +709,32 @@ rules:
 - surface an unsatisfied timing or model constraint as `UNSATISFIABLE` or an
   open design issue rather than silently changing the campaign.
 
-## 10. Remaining specification work
+## 10. Implemented generation interface and remaining execution work
 
-Before implementation continues:
+The lightweight generation CLI lives in
+`product/components/battery_campaign_harness/harness.py`. Its stable commands
+and corresponding Make targets are:
 
-1. define the exact generated `experiment.yaml`, multi-incident ground-truth,
-   and `verdict.json` schemas and align generated Oracle output with the Golden
-   transition vocabulary;
-2. define the machine-readable readiness payloads for Guardian, VSS bridge, and
-   Evidence Collector;
-3. define the runner command interface and Make targets;
-4. reconcile the current single-injection Mutator and mapped-only Collector
-   implementations with this multi-incident, three-plane contract;
+```text
+validate    validate configuration and all Golden Scenario prefix trios
+plan        print the selected campaign/scenario matrix
+generate    pre-generate selected experiment bundles
+```
+
+`plan` and `generate` accept optional `--campaign` and `--scenario` filters;
+the Makefile exposes them as `CAMPAIGN=...` and `SCENARIO=...`. Generation
+composes the existing single-injection Mutator sequentially and uses the real
+Guardian implementation to produce the final transition Oracle. Existing
+experiment directories are never overwritten. A failed model or timing goal
+is emitted as `unsatisfiable.yaml`.
+
+Live execution remains intentionally unavailable until these contracts exist:
+
+1. machine-readable readiness payloads for Guardian, VSS bridge, and Evidence
+   Collector;
+2. raw three-plane Evidence Collector output, including terminal source-time
+   confirmation and an explicit DFM projection result;
+3. the final `verdict.json` schema consumed by both runner and report renderer.
+
+Until then the harness must not fabricate readiness or report a partial replay
+as `PASS`.

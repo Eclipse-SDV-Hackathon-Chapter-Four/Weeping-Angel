@@ -1,11 +1,11 @@
 schema_version: 1
 
 scenarios:
-  cold_nominal: product/components/case_mutator/golden_scenarios/0_cold_nominal
-  warm_nominal: product/components/case_mutator/golden_scenarios/1_warm_nominal
-  hot_nominal: product/components/case_mutator/golden_scenarios/2_hot_nominal
-  overtemp_fault: product/components/case_mutator/golden_scenarios/3_overtemp_fault
-  hotspot_fault: product/components/case_mutator/golden_scenarios/4_hotspot_fault
+  cold_nominal: product/tests/battery_campaign/scenarios/0_cold_nominal
+  warm_nominal: product/tests/battery_campaign/scenarios/1_warm_nominal
+  hot_nominal: product/tests/battery_campaign/scenarios/2_hot_nominal
+  overtemp_fault: product/tests/battery_campaign/scenarios/3_overtemp_fault
+  hotspot_fault: product/tests/battery_campaign/scenarios/4_hotspot_fault
 
 scenario_groups:
   nominal: [cold_nominal, warm_nominal, hot_nominal]

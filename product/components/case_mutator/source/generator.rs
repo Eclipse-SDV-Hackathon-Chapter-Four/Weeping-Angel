@@ -155,7 +155,7 @@ pub fn generate(
                     && observation.predicted_at_ms <= candidate.end_ms
             })
             .collect();
-        match check_goal(&request.generation_goal, &scoped) {
+        match check_goal(request, &scoped) {
             Ok(()) => accepted.push((candidate, scoped)),
             Err(detail) => last_failure = detail,
         }
@@ -204,7 +204,7 @@ pub fn generate(
                     && observation.predicted_at_ms <= candidate.end_ms
             })
             .collect();
-    check_goal(&request.generation_goal, &observations).map_err(|detail| {
+    check_goal(request, &observations).map_err(|detail| {
         anyhow::anyhow!("rendered ASC no longer satisfies its generation goal: {detail}")
     })?;
     let duration_ms = candidate
@@ -295,6 +295,19 @@ fn parameter_choices(
         _ => unreachable!("validated operator"),
     };
 
+    if request.search.exact_parameters {
+        let exact = if mutation.operator == "out_of_range" {
+            quantize_signal(&mutation.signal, requested)?
+        } else {
+            let direction = requested.signum();
+            if direction == 0.0 {
+                bail!("{} parameter must be non-zero", mutation.operator);
+            }
+            requested
+        };
+        return Ok(vec![Some(exact)]);
+    }
+
     let mut values = Vec::new();
     if mutation.operator == "out_of_range" {
         let direction = if requested >= base { 1.0 } else { -1.0 };
@@ -379,9 +392,6 @@ fn apply_mutations(
 
     for (mutation, choice) in mutations.iter().zip(choices) {
         let duration = mutation.parameters.duration_samples;
-        if mutation.operator == "stuck" && duration < config.stuck.window_samples {
-            bail!("stuck duration is shorter than configured window");
-        }
         if start + duration > frames.len() {
             bail!("mutation trajectory exceeds ASC template");
         }
@@ -541,7 +551,11 @@ fn apply_action(
     })
 }
 
-fn check_goal(goal: &GenerationGoal, observations: &[PredictedObservation]) -> Result<(), String> {
+fn check_goal(
+    request: &GenerationRequest,
+    observations: &[PredictedObservation],
+) -> Result<(), String> {
+    let goal = &request.generation_goal;
     let observed: BTreeSet<ObservationSpec> = observations
         .iter()
         .filter(|observation| observation.state == "active")
@@ -554,6 +568,36 @@ fn check_goal(goal: &GenerationGoal, observations: &[PredictedObservation]) -> R
     let missing: Vec<_> = primary.difference(&observed).collect();
     if !missing.is_empty() {
         return Err(format!("primary observations not reached: {missing:?}"));
+    }
+    for target in &goal.primary {
+        let matching: Vec<_> = observations
+            .iter()
+            .filter(|observation| {
+                observation.state == "active"
+                    && observation.class == target.class
+                    && observation.level == target.level
+            })
+            .collect();
+        let required = match target.level.as_str() {
+            "WARNING" => Some(request.search.warning_target_utilization),
+            "VIOLATION" => Some(request.search.violation_target_utilization),
+            _ => None,
+        };
+        if let Some(required) = required {
+            if matching
+                .iter()
+                .any(|observation| observation.utilization.is_some())
+                && !matching
+                    .iter()
+                    .filter_map(|observation| observation.utilization)
+                    .any(|utilization| utilization + 1e-6 >= required)
+            {
+                return Err(format!(
+                    "primary observation {}/{} did not reach target utilization {}",
+                    target.class, target.level, required
+                ));
+            }
+        }
     }
     let explicit_forbidden: Vec<_> = observed
         .iter()
