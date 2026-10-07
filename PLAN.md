@@ -194,11 +194,11 @@ just use
     - undertemperature
     - thermal runaway
 
-report directly to OpenSOVD via fault_lib
+reports to DFM via fault_lib
 
 ## DFM
 
-leave out (direct reporting to OpenSOVD)
+just use (fault catalogue from guardian)
 
 ## OpenSOVD
 
