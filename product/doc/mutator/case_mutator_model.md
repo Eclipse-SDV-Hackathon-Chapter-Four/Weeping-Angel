@@ -1,551 +1,1255 @@
-# Battery Fault Case Mutator: ASC Injection Model
+# Battery Fault Case Mutator: Inverse Guardian Model
 
-> **Status: DRAFT / scaffold — deliberately incomplete.** Section structure
-> mirrors `product/doc/battery/battery_guardian_model.md`. Undecided items are
-> marked `<!-- TODO(Dn): ... -->`; cross-artifact gaps are collected in
-> "Open points and assumptions" below.
+> **Status:** normative design specification for the case mutator.
+>
+> The mutator does not merely apply arbitrary signal perturbations. It constructs
+> quantized CAN mutations that are expected to produce a requested Guardian
+> observation under the authoritative Battery Guardian model.
 
-## Authority
+---
 
-- This document is **authoritative** for the case mutator's **mutation
-  mechanics and parameters** (analogous to how `battery_guardian_model.md` is
-  authoritative for the Guardian).
-- Fault and detection **naming/registry authority follows ADR-005**: injected
-  causes live in `product/config/battery_guardian/fault_injection_model.yaml`,
-  the detection-to-DFM projection in
-  `product/config/battery_guardian/guardian_diagnostics.json`, admissibility in
-  `product/config/battery_guardian/guardian_model.yaml`; the interface file
-  `product/interfaces/battery_fault_contract.yaml` (schema_version 3) defines
-  event shapes only. This document references those identifiers and does not
-  redefine them (see B).
-- Guardian observations are the orthogonal pair `DetectionClass ×
-  DetectionLevel` (ADR-006). This document treats the pair as **observed**
-  output; the mutator only emits **injection ground truth** (see E).
-- The `demo/` tree is a reference implementation, not authoritative (ADR-003).
-  The prototype under `product/components/case_mutator/` is transient; this
-  specification is the durable definition.
+## 1. Authority and semantic separation
 
-## Open points and assumptions (to be closed in a later iteration)
+This document is authoritative for the **case mutator's generation algorithm,
+mutation mechanics, inverse-model constraints, and ground-truth output**.
 
-This specification is intentionally incomplete. The items below are recorded so
-a later iteration can close them.
+The following artifacts remain authoritative for their respective semantics:
 
-### A. Thermal warning/critical — resolved by ADR-006
+```text
+product/config/battery_guardian/guardian_model.yaml
+    Guardian model parameters
 
-The former assumption (absolute band + warning + critical) is now implemented:
+product/doc/battery/battery_guardian_model.md
+    Guardian model formulas and boundary semantics
 
-- `THERMAL_LIMIT` uses `T_max`; the critical threshold is `T_crit =
-  absolute_max_c`, the warning threshold is `T_warn = absolute_max_c -
-  warning_margin_c`.
-- At the configured values (`absolute_max_c = 70`, `warning_margin_c = 10`):
-  - Normal: `T_max < 60`,
-  - `THERMAL_LIMIT / WARNING`: `60 <= T_max < 70`,
-  - `THERMAL_LIMIT / CRITICAL`: `T_max >= 70`.
-- At exactly 70 °C the critical observation holds **without**
-  `PHYSICAL_TEMP_ABSOLUTE_LIMIT`; above 70 °C both hold independently.
-- Spread, hotspot, and rate use `utilization = observed / limit`
-  (`warning.utilization_threshold = 0.8`): no detection below 0.8, `WARNING`
-  from 0.8 through 1.0, `VIOLATION` above 1.0.
+product/config/battery_guardian/fault_injection_model.yaml
+    injected fault classes and canonical mutation operators
 
-Overheating (`THERMAL_LIMIT`) and implausibility
-(`PHYSICAL_TEMP_ABSOLUTE_LIMIT`) are therefore distinguishable.
+product/config/battery_guardian/guardian_diagnostics.json
+    Guardian DetectionClass × DetectionLevel -> DFM projection
 
-### B. Naming and registry authority — resolved by ADR-005 (re-checked)
+product/interfaces/battery_fault_contract.yaml
+    event schemas only
+```
 
-- `fault_injection_model.yaml` — injected causes (ground truth),
-- `guardian_diagnostics.json` — detection-to-DFM projection,
-- `guardian_model.yaml` — admissibility parameters,
-- `battery_fault_contract.yaml` (v3) — event shapes only.
+The mutator must keep three concepts strictly separate:
 
-### C. Downstream scope
+```text
+Injected fault class
+    what the campaign deliberately changes
 
-Guardian detection/classification faults and diagnostic-chain (DFM/OpenSOVD)
-faults stay out of scope (§1.3).
+Generation goal
+    which Guardian observation(s) the generated case shall produce
 
-### D. Stale timeout — inconsistent values
+Guardian observation
+    DetectionClass × DetectionLevel produced by forward model evaluation
+```
 
-- `product/config/battery_guardian/guardian_model.yaml` sets
-  `missing_packet_timeout_ms: 500`.
-- `battery_guardian_model.md` §8 proposes `τ_stale = 2.0 s`.
+The mutator emits injection ground truth. It must never infer the injected class
+from Guardian output.
 
-The temporal recipe (§8) is parameterized by `τ_stale`; the two values must be
-reconciled by a later iteration.
+---
 
-### E. Alignment with the canonical injection model — open
+## 2. Role in the campaign
 
-The authoritative `fault_injection_model.yaml` is narrower than the detection
-vocabulary. Its signal operators are `stuck`, `spike`, `drift`, `out_of_range`,
-plus `signal.combination` (>= 2 distinct signals); transport/source faults use
-`action` operators `delay`, `drop`, `suspend_source`. Consequences:
+The mutator reads a nominal ASC replay and produces:
 
-- `PHYSICAL_TEMP_ORDERING`, `PHYSICAL_SOC_RANGE`, `PHYSICAL_SOC_RATE` have **no
-  injection class**;
-- `THERMAL_LIMIT` (warning/critical) has **no injection class**;
-- an isolated `PHYSICAL_TEMP_HOTSPOT` only arises via `signal.drift`.
+1. one mutated `.asc` replay;
+2. one injection-side ground-truth record;
+3. one test oracle describing the requested Guardian observation and allowed /
+   forbidden co-detections.
 
-Per ADR-006 the injection vocabulary is deliberately separate from the
-detection vocabulary; whether to extend it or to document these as gaps must be
-decided in a later iteration. The mutator must not invent classes from
-Guardian output.
-
-## 1. Scope
-
-### 1.1 Role in the evidence chain
-
-The Case Mutator produces the **input-side ground truth** of a fault campaign.
-It reads a reference ASC replay, applies exactly one mutation (deterministic
-given a recorded seed) for a single injection class, and emits a mutated `.asc`
-replay plus a ground-truth record (see §10). The mutated replay then runs
-through the production path:
+The replay follows the production path unchanged:
 
 ```text
 ASC replay -> KUKSA CAN provider -> Databroker -> VSS bridge
-          -> Guardian -> DFM -> OpenSOVD
+           -> BatteryTempEvent ---------------------------> Evidence Collector
+                     \-> Guardian
+                           |-> GuardianEvidenceEvent ------> Evidence Collector
+                           \-> DFM -> OpenSOVD ------------> Evidence Collector
 ```
 
-The Evidence Collector correlates the Guardian's `DetectionClass ×
-DetectionLevel` observations with the injection ground truth to decide
-pass/fail per campaign. The mutator never bypasses CAN decoding, VSS mapping or
-the VSS bridge, and never infers a class from Guardian output.
+The mutator operates on CAN frame `0x100`, DLC 8, containing:
 
-### 1.2 In scope (v1)
+```text
+temp_min
+temp_avg
+temp_max
+soc
+```
 
-- **Value mutation** of the battery frame (CAN `0x100`, DLC 8): `temp_min`,
-  `temp_avg`, `temp_max`, `SoC`; including implausibility and thermal
-  warning/critical levels.
-- **Temporal mutation** of the ASC timeline: frame drop / timestamp retiming
-  to create stream gaps (`STREAM_STALE`, source side).
-- Reproducibility (seeded; the same seed, template and injection class give
-  the same output), replayability, and the ground-truth record.
+All non-target ASC content must remain byte-identical unless a temporal mutation
+explicitly changes the timeline.
 
-### 1.3 Out of scope (v1)
+---
 
-- Guardian detection/classification faults (PLAN.md Step 2).
-- Diagnostic-chain faults (DFM / OpenSOVD) (PLAN.md Step 3).
-- Network/protocol transport faults (`transport.delay`, `transport.drop`,
-  `transport.duplicate`; e.g. via Toxiproxy) — deferred, may change later.
-- Duplicate/reorder injection (deferred); mitigation/actuator behavior.
+## 3. Required mutator inputs
 
-### 1.4 Replay and timing assumptions
+Each generation request contains:
 
-- Sample period `dt = 100 ms`; DBC quantization `q_T = 0.5 degC`,
-  `q_SoC = 0.5 pp` (see `battery_guardian_model.md` §1).
-- The replay honors ASC timestamps (inter-frame delays).
-- The Guardian derives rate and freshness from **receive time**, so temporal
-  mutations are observable only if the replay honors the timestamps.
-- Only battery frames (CAN `0x100`, DLC 8) are mutated; all other lines stay
-  byte-exact.
+```yaml
+template: <reference.asc>
+battery_model: product/config/battery_guardian/guardian_model.yaml
+injection_id: <stable id>
+injected_class: <canonical injected fault class>
+mutations: [...]
+generation_goal: ...
+seed: 0
+```
 
-## 2. Configuration parameters
+The exact Guardian model file must be loaded at generation time and treated as
+read-only input. The mutator must not duplicate or override Guardian thresholds.
 
-### 2.1 Input and output
+Record the SHA-256 hash of the model file in every generated case.
 
-| Parameter | Proposed value | Meaning |
-|---|---|---|
-| `template` | reference ASC path | nominal/reference replay (battery frames CAN `0x100`, DLC 8) |
-| `output_dir` | `cases/<run_id>` | one mutated `.asc` + ground-truth record per case |
-| `repetitions` | 1 | cases generated per run |
-| `battery_model` | `product/config/battery_guardian/guardian_model.yaml` | battery model parameters consumed by the recipes, read-only (§2.4) |
+---
 
-### 2.2 Timing and quantization (fixed by the CAN asset / DBC)
+## 4. Canonical injected fault classes
 
-| Parameter | Symbol | Value | Unit |
-|---|---:|---:|---|
-| Sample period | $\Delta t$ | 100 | ms |
-| Temperature quantum | $q_T$ | 0.5 | °C |
-| SoC quantum | $q_{SoC}$ | 0.5 | pp |
+The v1 mutator supports:
 
-### 2.3 Mutation parameters
+```text
+signal.stuck
+signal.spike
+signal.drift
+signal.out_of_range
+signal.combination
 
-| Parameter | Proposed value | Meaning |
-|---|---|---|
-| `lead_in_frames` | 20 | battery frames replayed byte-identical before the mutation |
-| `seed` | 0 | RNG seed; the same seed, template and injection class give the same output (D5d) |
-| `ramp_step` | $q_T$ | default rate-safe step |
-| `rate_jump` | $\ge 2\,q_T$ | default rate-operator jump |
+transport.delay
+transport.drop
+source.dropout
+```
 
-Individual recipes may override these; overrides are part of the case's
-parameters and are recorded in the ground-truth record.
+Deferred classes are not implemented:
 
-### 2.4 Battery model parameters (read from the Guardian model)
+```text
+transport.duplicate
+transport.reorder
+source.replay_interruption
+diagnostics.dfm_write_delay
+diagnostics.opensovd_partial_visibility
+```
 
-The recipes in §4–§8 are the inverse of the Guardian's invariants: a mutation
-must drive the target residual across zero (or its utilization across the
-warning threshold) while staying inside every other check — rate, stuck, and
-freshness. The generator therefore needs the battery model's admissibility
-parameters. They are an **input**, not mutator configuration: the generator
-reads them from the authoritative Guardian model
-(`product/config/battery_guardian/guardian_model.yaml`; the `battery_model`
-parameter of §2.1) at generation time and must not redefine or override them.
-Formulas and level semantics are defined in `battery_guardian_model.md` and only
-referenced here.
+### 4.1 Signal targets
 
-The table lists every model key the generator consumes and its use:
+Canonical signal names:
 
-| `guardian_model.yaml` key | Symbol | Value | Generator use |
-|---|---:|---:|---|
-| `evaluation_period_ms` | $\tau_{\mathrm{watchdog}}$ | 100 ms | evaluation cadence; equal to $\Delta t$, so every mutated frame is evaluated once |
-| `missing_packet_timeout_ms` | $\tau_\mathrm{stale}$ | 500 ms | §8 gap size $n \ge \lceil \tau_\mathrm{stale}/\Delta t \rceil$ (Open point D) |
-| `warning.utilization_threshold` | $u_{\mathrm{warning}}$ | 0.8 | warning band of §3.3, §4.4, §4.5, §5 |
-| `temperature.absolute_min_c` / `absolute_max_c` | $T_{\mathrm{abs,min}}/T_{\mathrm{abs,max}}$ | −30 / 70 °C | §4.1 `out_of_range` target values |
-| `temperature.warning_margin_c` | $M_{\mathrm{warning}}$ | 10 °C | §4.2: $T_{\mathrm{warn}} = T_{\mathrm{abs,max}} - M_{\mathrm{warning}} = 60$ |
-| `temperature.reference_c` / `hot_state_c` | $T_{\mathrm{ref}}/T_{\mathrm{hot}}$ | 20 / 70 °C | $\theta(T)$ for §4.4, §4.5, §5 |
-| `temperature.spread.cold_c` / `hot_c` | $S_{\mathrm{cold}}/S_{\mathrm{hot}}$ | 12 / 7 °C | §4.4 drift target size |
-| `temperature.hotspot.cold_c` / `hot_c` | $H_{\mathrm{cold}}/H_{\mathrm{hot}}$ | 5 / 2 °C | §4.5 joint shifts and ramps |
-| `temperature.dynamics.heating_rate_c_per_s.cold` / `hot` | $R_{\uparrow,\mathrm{cold}}/R_{\uparrow,\mathrm{hot}}$ | 8 / 5 °C/s | §3.3 rate safety; §5 violations |
-| `temperature.dynamics.cooling_rate_c_per_s` | $R_\downarrow$ | 6 °C/s | §3.3 rate safety; §5 cooling |
-| `temperature.dynamics.soc_coupling.*` | $K_{SoC}/Q_{\mathrm{cap}}$ | disabled / 0.25 °C/pp / 2.0 pp/s | §5 SoC-dependent widening; `enabled: false` keeps the bound temperature-only |
-| `soc.min_percent` / `max_percent` | $SoC_{\min}/SoC_{\max}$ | 0 / 100 | §6 range recipe target |
-| `soc.max_step_pp` | $\Delta SoC_{\max}$ | 0.5 pp | §6 rate recipe step |
-| `stuck.enabled` | — | true | §7 stuck recipes are part of the campaign |
-| `stuck.window_samples` | $N_{\mathrm{stuck}}$ | 10 | §7 hold length; shorter freezes do not trip |
-| `stuck.flatness_epsilon_c` | $\epsilon_{\mathrm{stuck}}$ | 0.25 °C | §7 freeze flatness vs. peer wiggle amplitude |
-| `stuck.temperature_excitation_c` / `soc_excitation_pp` | $E_T/E_{SoC}$ | 1.0 °C / 1.0 pp | §7 peer excitation |
+```text
+temp_min
+temp_avg
+temp_max
+soc
+```
 
-Each generated case records the model configuration it was generated against
-(§10), so a later configuration change cannot silently invalidate past cases.
+`signal.stuck` is valid only for:
 
-## 3. Generic mutation formulation
+```text
+temp_min
+temp_avg
+temp_max
+```
 
-The Guardian evaluates one residual per invariant,
+SoC may be used as independent excitation for temperature-stuck generation but
+is not itself a stuck target.
+
+### 4.2 Combination faults
+
+`signal.combination` contains at least two distinct signal mutations:
+
+```yaml
+injected_class: signal.combination
+mutations:
+  - signal: temp_min
+    operator: drift
+    parameters: {...}
+  - signal: temp_max
+    operator: drift
+    parameters: {...}
+```
+
+Nested combinations are forbidden.
+
+Combination faults are first-class because coordinated changes may alter one
+Guardian invariant while preserving others.
+
+---
+
+## 5. Generation goal
+
+Every generated case must have an explicit **generation goal**.
+
+Example:
+
+```yaml
+generation_goal:
+  primary:
+    - class: PHYSICAL_TEMP_SPREAD
+      level: WARNING
+
+  allowed:
+    - class: PHYSICAL_TEMP_RATE
+      level: WARNING
+
+  forbidden:
+    - class: PHYSICAL_TEMP_SPREAD
+      level: VIOLATION
+    - class: PHYSICAL_TEMP_ABSOLUTE_LIMIT
+      level: VIOLATION
+```
+
+Semantics:
+
+```text
+primary
+    observations that MUST be produced
+
+allowed
+    additional observations that MAY occur
+
+forbidden
+    observations that MUST NOT occur
+```
+
+Anything not listed as `primary` or `allowed` is forbidden by default unless the
+case explicitly sets:
+
+```yaml
+allow_unspecified_codetections: true
+```
+
+Default:
+
+```text
+allow_unspecified_codetections = false
+```
+
+The generation goal is **test-oracle data**, not injection ground truth.
+
+---
+
+## 6. Guardian model inputs consumed by the mutator
+
+The mutator must consume the same model keys as the Guardian.
+
+Current model:
+
+```text
+guardian.evaluation_period_ms
+guardian.missing_packet_timeout_ms
+
+guardian.warning.utilization_threshold
+
+guardian.temperature.absolute_min_c
+guardian.temperature.absolute_max_c
+guardian.temperature.warning_margin_c
+guardian.temperature.reference_c
+guardian.temperature.hot_state_c
+
+guardian.temperature.spread.cold_c
+guardian.temperature.spread.hot_c
+
+guardian.temperature.hotspot.cold_c
+guardian.temperature.hotspot.hot_c
+
+guardian.temperature.dynamics.heating_rate_c_per_s.cold
+guardian.temperature.dynamics.heating_rate_c_per_s.hot
+guardian.temperature.dynamics.cooling_rate_c_per_s
+guardian.temperature.dynamics.soc_coupling.enabled
+guardian.temperature.dynamics.soc_coupling.gain_c_per_pp
+guardian.temperature.dynamics.soc_coupling.rate_cap_pp_per_s
+
+guardian.soc.min_percent
+guardian.soc.max_percent
+guardian.soc.max_rate_pp_per_s
+
+guardian.stuck.enabled
+guardian.stuck.window_samples
+guardian.stuck.flatness_epsilon_c
+guardian.stuck.temperature_excitation_c
+guardian.stuck.soc_excitation_pp
+```
+
+The model configuration must pass the same validity constraints as the Guardian,
+including:
 
 $$
-r_k = \mathrm{IST}_k - \mathrm{SOLL}_k,
-\qquad r_k > 0 \;\Longrightarrow\; \text{fault condition}
+T_{\mathrm{abs,min}}
+\le T_{\mathrm{ref}}
+< T_{\mathrm{hot}}
+\le T_{\mathrm{abs,max}}.
 $$
 
-(see `battery_guardian_model.md` §3), and turns it into an observation
-`DetectionClass × DetectionLevel` (ADR-006). A mutation is the inverse
-operation: drive the sampled vector
+A model rejected by the Guardian must also be rejected by the mutator.
+
+Do not silently translate obsolete model keys such as `soc.max_step_pp`.
+
+---
+
+## 7. Quantization and timing
+
+DBC properties:
+
+```text
+nominal sample period = 100 ms
+temperature quantum   = 0.5 °C
+SoC quantum           = 0.5 pp
+```
+
+For dynamic Guardian rules, the relevant interval is the actual receive time:
 
 $$
-x_k = \left(T_{\min,k},\, T_{\mathrm{avg},k},\, T_{\max,k},\, SoC_k\right)
+\Delta t_k=t^{recv}_k-t^{recv}_{k-1}.
 $$
 
-so that the target residual crosses zero (violation) or the warning fraction
-(warning). The recipes below are prose and reference the operators defined
-here; their relation to observations is informative only.
+Generation may initially assume the ASC schedule for candidate construction, but
+every candidate must be forward-verified using the same elapsed-time semantics
+as the Guardian.
 
-### 3.1 Work region and lead-in
+All emitted signal values must be representable by the DBC.
 
-Mutations apply to the **work region** only: the battery frames after the
-configured lead-in. Lead-in frames are replayed byte-identical, so each signal
-starts from a reference base
+### 7.1 Constraint-preserving quantization
+
+Do not perform unconstrained "round to nearest".
+
+Quantization must preserve the requested observation.
+
+For a continuous upper-bound check with limit $L$ and warning threshold $u_w$:
+
+```text
+WARNING:
+    choose a representable value y such that
+    u_w * L <= y <= L
+
+VIOLATION:
+    choose a representable value y such that
+    y > L
+```
+
+Prefer robust interior targets instead of exact thresholds:
+
+```text
+default warning target utilization   = 0.90
+default violation target utilization = 1.10
+```
+
+These are mutator generation defaults, not Guardian model parameters.
+
+If the requested band contains no representable value, the candidate is
+unsatisfiable.
+
+---
+
+## 8. Core generation algorithm
+
+The mutator must generate cases by **inverse Guardian evaluation**.
+
+Normative algorithm:
+
+```text
+generate_case(template, injection, generation_goal, model):
+
+    1. Load and validate the exact Guardian model.
+
+    2. Parse the reference ASC and decode the nominal battery frames.
+
+    3. Preserve the configured lead-in unchanged.
+
+    4. Select the mutation start state x0 from the nominal replay.
+
+    5. Forward-evaluate x0 with the Guardian model.
+
+    6. Translate generation_goal into mathematical constraints.
+
+    7. Add constraints imposed by:
+         - injected_class;
+         - mutation operator;
+         - selected target signal(s);
+         - DBC representable range;
+         - DBC quantization;
+         - requested primary observations;
+         - allowed co-detections;
+         - forbidden observations;
+         - temporal ordering and duration.
+
+    8. Solve for one or more candidate mutated values / trajectories.
+
+    9. Quantize candidates with constraint-preserving quantization.
+
+   10. Forward-evaluate the complete quantized trajectory using the exact
+       Guardian model semantics.
+
+   11. Accept a candidate iff:
+         - every primary observation occurs;
+         - no forbidden observation occurs;
+         - all mutation/operator constraints are satisfied.
+
+   12. Otherwise search the next candidate.
+
+   13. If no representable candidate exists:
+         return UNSATISFIABLE with a structured reason.
+
+   14. Emit the mutated ASC, injection ground truth, model provenance,
+       and test oracle.
+```
+
+Step 10 is mandatory even for analytically invertible rules.
+
+---
+
+## 9. Inverse Guardian constraints
+
+### 9.1 Thermal limit
+
+Guardian thresholds:
 
 $$
-x_0 = \left(T_{\min}^{0},\, T_{\mathrm{avg}}^{0},\, T_{\max}^{0},\, SoC^{0}\right)
+T_{\mathrm{crit}}=T_{\mathrm{abs,max}},
 $$
 
-read from the last lead-in frame. The 100 ms frame grid is preserved; if a
-pattern is longer than the template it continues on the same grid.
+$$
+T_{\mathrm{warn}}
+=
+T_{\mathrm{abs,max}}-M_{\mathrm{warning}}.
+$$
 
-### 3.2 Quantization
+Inverse constraints:
 
-All mutated values are exact multiples of the DBC quantization
-$q_T = 0.5\,^\circ\mathrm C$ and $q_{SoC} = 0.5\ \mathrm{pp}$ (Guardian model
-§1). Rounding to the nearest quantum is the only allowed value transform.
+```text
+THERMAL_LIMIT / WARNING:
+    T_warn <= temp_max < T_crit
 
-### 3.3 Atomic step and rate safety
+THERMAL_LIMIT / CRITICAL:
+    temp_max >= T_crit
+```
 
-The smallest non-zero temperature change is one quantum, $q_T = 0.5\,^\circ\mathrm C$.
-On the 100 ms grid this is $5\,^\circ\mathrm C/\mathrm s$, which stays below
-the Guardian limits $R_\uparrow = 8 - 3\theta \in [5,8]\,^\circ\mathrm C/\mathrm s$
-and $R_\downarrow = 6\,^\circ\mathrm C/\mathrm s$ (Guardian model §5):
+If the goal forbids `PHYSICAL_TEMP_ABSOLUTE_LIMIT`, additionally require:
 
-- $|\Delta| = q_T$ per frame $\Rightarrow$ rate-safe,
-- $|\Delta| \ge 2\,q_T$ per frame $\Rightarrow$ rate violation ($\ge 10\,^\circ\mathrm C/\mathrm s$).
+$$
+T_{\max}\le T_{\mathrm{abs,max}}.
+$$
 
-A one-quantum drift drives the utilization ratio $u = \mathrm{observed}/\mathrm{limit}$
-gradually, so the same recipe naturally passes through `WARNING` before
-`VIOLATION`; a jump skips the warning band.
+Therefore the isolated critical point is exactly:
 
-### 3.4 Stuck excitation
+$$
+T_{\max}=T_{\mathrm{abs,max}}.
+$$
 
-A flat signal is not a stuck fault by itself. The Guardian requires a
-10-sample window that is flat within $\epsilon_{\mathrm{stuck}} = 0.25\,^\circ\mathrm C$
-while another signal is excited by at least $1.0\,^\circ\mathrm C$ / $1.0\ \mathrm{pp}$
-(Guardian model §7). Hence, whenever a recipe holds a signal (nearly)
-constant it must either keep **all** signals constant (no excitation, no stuck)
-or give the peers a wiggle of amplitude $> \epsilon_{\mathrm{stuck}}$.
+A coherent thermal mutation should normally use `signal.combination` so that
+`temp_min`, `temp_avg`, and `temp_max` may be shifted together while preserving
+spread/hotspot.
 
-### 3.5 Operator catalog
+There is no separate injected class called `thermal_warning` or
+`thermal_critical`.
 
-Two layers are used. The **canonical operators** are those of
-`fault_injection_model.yaml`; they are what an injection instance specifies.
-The **primitives** are the implementation vocabulary used to realize them in
-the ASC file.
+### 9.2 Absolute temperature limit
 
-Canonical operators:
+Inverse conditions:
 
-| Operator | Applies to | Parameters |
-|---|---|---|
-| `stuck` | one signal | `duration_samples` |
-| `spike` | one signal | `delta`, `duration_samples` |
-| `drift` | one signal | `rate_per_sample`, `duration_samples` |
-| `out_of_range` | one signal | `value`, `duration_samples` |
-| (`signal.combination`) | >= 2 distinct signals | one operator each |
-| `delay` / `drop` / `suspend_source` | action | `delay_ms`/`duration_ms` |
+```text
+low violation:
+    temp_min < T_abs,min
 
-Implementation primitives (work frame $k$, per signal column):
+high violation:
+    temp_max > T_abs,max
+```
 
-| Primitive | Definition | Realizes |
-|---|---|---|
-| `base` | repeat $x_0$ byte-identical | the frozen reference |
-| `hold(v, n)` | $v$ for $n$ frames | `out_of_range` plateau |
-| `ramp(v_0, v_t, s)` | $v_k = v_0 \pm k\,s$, $\lvert s\rvert = q_T$ | `drift` |
-| `spike(v_p, n)` | $v_p$ for $n$ frames, else `base` | `spike` |
-| `step(\Delta)` | $+\Delta$ for one frame | abrupt `out_of_range` |
-| `wiggle(a)` | alternating $\{0, +a\}$, $a > \epsilon_{\mathrm{stuck}}$ | peer excitation for `stuck` |
-| `shift_all(\Delta)` | $+\Delta$ on $T_{\min}, T_{\mathrm{avg}}, T_{\max}$ | coherent change (thermal limit) |
-| `diverge(s)` | $T_{\max} {+}{=} s$, $T_{\min} {-}{=} s$ | spread growth |
-| `drop(n)` / `retime(\Delta t)` | remove frames / shift timestamps | `drop`, `suspend_source`, `delay` |
+A requested strict violation must be quantized to a representable value strictly
+outside the bound.
 
-An injection instance is executed faithfully: a mutation names **one**
-signal (except `signal.combination`). Where a recipe below is marked
-"isolated" it is an option that avoids co-trips, not a requirement of the
-canonical operator.
+Typical injection class:
 
-## 4. Value / magnitude injection recipes
+```text
+signal.out_of_range
+```
 
-Observation references in this section are informative only; the registry is
-Open point B and the token mapping is Open point E.
+### 9.3 Temperature ordering
 
-### 4.1 Implausible value (absolute limit)
+Guardian invariant:
 
-Guardian invariant (model §4.1): $T_{\mathrm{abs,min}} \le T_{\min} \le T_{\max} \le T_{\mathrm{abs,max}}$;
-only $T_{\min}$ and $T_{\max}$ are magnitude-checked. This is the
-`signal.out_of_range` operator.
+$$
+T_{\min}\le T_{\mathrm{avg}}\le T_{\max}.
+$$
 
-**Recipe:** drive the named signal to the absolute `value` for
-`duration_samples` (e.g. `temp_min = -35`), e.g. via `step` to the value and
-`hold`. Coherently shifting all three (`shift_all`) keeps spread/hotspot
-constant if an isolated implausibility is wanted.
+Inverse alternatives:
 
-The prototype's `signal.out_of_range` sets `temp_min = -35.0`,
-`duration_samples = 10`.
+$$
+T_{\min}>T_{\mathrm{avg}}
+$$
 
-### 4.2 Thermal limit (warning / critical)
+or
 
-Guardian observation (model §2.2, ADR-006): `THERMAL_LIMIT` with `T_warn = 60`
-and `T_crit = 70` on `T_max`. This is the coherent-change case; it stays inside
-the absolute band up to and including 70 °C.
+$$
+T_{\mathrm{avg}}>T_{\max}.
+$$
 
-**Warning recipe:** `shift_all(+q_T)` from $x_0$ until `T_max >= T_warn` and
-`T_max < T_crit`; hold. **Critical recipe:** continue until `T_max >= T_crit`;
-at exactly 70 °C only `THERMAL_LIMIT / CRITICAL` holds, above 70 °C also
-`PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION`. A joint shift keeps spread/hotspot
-constant and is rate-safe.
+Use at least one representable quantum beyond the peer value.
 
-*Gap (Open point E):* the canonical injection model currently has **no**
-injection class for `THERMAL_LIMIT`; a coherent increase is only mentioned as
-an example in `product/config/battery_guardian/README.md`.
+There is no dedicated ordering injection class. A case uses one of the existing
+signal mutation classes and records ordering only as the requested observation.
 
-### 4.3 Temperature ordering
+### 9.4 Spread
 
-Guardian invariant (model §4.2): $T_{\min} \le T_{\mathrm{avg}} \le T_{\max}$;
-binary `VIOLATION`. Gap: no injection class (Open point E).
+Guardian limit:
 
-**Recipe ($T_{\min} > T_{\mathrm{avg}}$):** `ramp(T_{\min}, T_{\mathrm{avg}} + q_T, +q_T)`
-while `wiggle` on $T_{\mathrm{avg}}$ and $T_{\max}$. **Recipe ($T_{\mathrm{avg}} > T_{\max}$):**
-`ramp(T_{\mathrm{avg}}, T_{\max} + q_T, +q_T)` with `wiggle` on $T_{\min}$ and
-$T_{\max}$. A single quantum above the peer already violates the strict
-ordering; the ramp is rate-safe and the peers are not stuck.
+$$
+L_S=S(T_{\mathrm{avg}})
+$$
 
-### 4.4 Temperature spread
+with
 
-Guardian invariant (model §4.3): $T_{\max} - T_{\min} \le S(\theta)$, with
-utilization $u = (T_{\max}-T_{\min})/S(\theta)$: `WARNING` for $u \ge 0.8$,
-`VIOLATION` for $u > 1$. This is the `signal.drift` mechanism.
+$$
+S(T)=
+S_{\mathrm{cold}}
+-
+(S_{\mathrm{cold}}-S_{\mathrm{hot}})
+\theta(T).
+$$
 
-**Recipe (`signal.drift`):** `ramp($T_{\max}$, $T_{\max}^{0} + k\,q_T$, $+q_T$)`
-for `rate_per_sample * duration_samples` (the canonical instance uses
-`rate_per_sample = 0.5`, `duration_samples = 30`). Because `T_avg` and `T_min`
-stay put, the hotspot `(T_max - T_avg)` also grows — the same drift can
-co-raise `PHYSICAL_TEMP_HOTSPOT`. The drift is below the rate limit, so it
-passes through the spread/hotspot `WARNING` band before `VIOLATION`.
+Observed:
 
-**Isolated option:** grow the spread by lowering only $T_{\min}$ (`ramp` down
-by $q_T$ per frame) while `wiggle` on the others; the hotspot stays constant
-and the 5 °C/s decrease is below $R_\downarrow = 6$ °C/s.
+$$
+S_{\mathrm{obs}}=T_{\max}-T_{\min}.
+$$
 
-### 4.5 Hotspot
+Inverse target:
 
-Guardian invariant (model §4.4): $T_{\max} - T_{\mathrm{avg}} \le H(\theta)$,
-with the same utilization rules. The canonical injection model produces this
-only via `signal.drift` (Open point E).
+```text
+SPREAD / WARNING:
+    u_warning * L_S <= S_obs <= L_S
 
-**Isolated option:** shift $T_{\max}$ and $T_{\min}$ jointly by $+q_T$ while
-`wiggle` on $T_{\mathrm{avg}}$; the hotspot grows by $q_T$ per frame, the
-spread stays constant.
+SPREAD / VIOLATION:
+    S_obs > L_S
+```
 
-## 5. Dynamic injection recipes
+If `temp_avg` is held constant and `temp_min` is the target:
 
-The rate check compares per-signal changes against $R_\uparrow(T_{\mathrm{avg},k-1}, Q_k)$
-and $R_\downarrow$ (model §5), with `utilization = |rate|/limit`: `WARNING`
-from 0.8, `VIOLATION` above 1.0. The previous average drives $\theta$, keeping
-the check causal, and `signal.spike` is the canonical operator (there is no
-`SPIKE` detection class).
+$$
+T_{\min}^{*}=T_{\max}-S_{\mathrm{target}}.
+$$
 
-**Spike (`signal.spike`):** `spike($\Delta$, n)` on the named signal with
-$\Delta \ge 2\,q_T$ and a few quanta of margin against receive-time jitter
-(the canonical instance is `temp_max`, `delta = 10.0`, `duration_samples = 1`).
-The injected frame and the return frame each cross the rate limit. Because only
-one signal moves, spatial co-trips depend on the chosen signal and delta.
+If `temp_max` is the target:
 
-**Sustained ramp:** `ramp(x_0, x_0 + $\Delta$, +$2q_T$)` for a run of frames —
-every frame violates $R_\uparrow$; applies to `drift`-like injections.
+$$
+T_{\max}^{*}=T_{\min}+S_{\mathrm{target}}.
+$$
 
-**Cooling:** `spike(-$\Delta$, n)` with $\Delta \ge 2\,q_T$
-($10\,^\circ\mathrm C/\mathrm s > 6\,^\circ\mathrm C/\mathrm s$).
+After quantization, recompute $\theta$, $L_S$, utilization, and all other
+Guardian rules.
 
-## 6. State-of-charge injection recipes
+A single-signal drift may also change hotspot and rate. Such co-detections must
+be included in `allowed` or the solver must choose another realization.
 
-The SoC checks are a binary range check and a per-sample step check with
-$\Delta SoC_{\max} = q_{SoC} = 0.5\ \mathrm{pp}$ (model §6). The DBC field is
-unsigned, so $SoC \ge 0$ cannot be violated; only the upper bound is reachable.
+### 9.5 Hotspot
 
-*Gap (Open point E):* `fault_injection_model.yaml` has **no** SoC operator, so
-these recipes are documented for completeness only.
+Guardian limit:
 
-**Range:** `ramp(SoC^0, 100 + q_{SoC}, +q_{SoC})` — a one-quantum step equals
-$\Delta SoC_{\max}$ and is strictly safe (the check is $> \Delta SoC_{\max}$);
-hold above 100. Wiggle the temperatures, because a rising SoC excites the stuck
-detector while flat temperatures would be classified as stuck. A single
-`step(\ge 2\,q_{SoC})` additionally raises the step check.
+$$
+L_H=H(T_{\mathrm{avg}})
+$$
 
-**Rate:** `step(+2\,q_{SoC}, 1)` for one frame, then return, or a sustained
-`ramp` with $2\,q_{SoC}$ per frame, keeping $0 \le SoC \le 100$.
+with
 
-## 7. Signal-stuck injection recipe
+$$
+H(T)=
+H_{\mathrm{cold}}
+-
+(H_{\mathrm{cold}}-H_{\mathrm{hot}})
+\theta(T).
+$$
 
-Stuck requires a signal whose $N_{\mathrm{stuck}} = 10$-sample window is flat within
-$\epsilon_{\mathrm{stuck}} = 0.25\,^\circ\mathrm C$ **and** an independently excited
-peer (model §7). This is the `stuck` operator.
+Observed:
 
-**Recipe:** `base` on the named signal for at least $N_{\mathrm{stuck}}$ frames
-(byte-identical raw values; the canonical instance is `temp_avg`,
-`duration_samples = 20`), while a peer carries a sawtooth of amplitude at least
-$E_T = 1.0\,^\circ\mathrm C$ with steps $\le q_T$ (rate-safe). The peer is
-demonstrably changing, so the frozen channel is classified as stuck. A variant
-freezes SoC and excites a temperature channel by at least $E_{SoC} = 1.0$ pp.
+$$
+H_{\mathrm{obs}}=T_{\max}-T_{\mathrm{avg}}.
+$$
 
-*Note:* if **all** signals are flat there is no excitation and no stuck
-detection; a frozen run shorter than the window does not trigger either. The
-peer sawtooth also perturbs spread/hotspot by up to its amplitude.
+Inverse target:
 
-## 8. Temporal injection (stream gap)
+```text
+HOTSPOT / WARNING:
+    u_warning * L_H <= H_obs <= L_H
 
-`STREAM_STALE` is a symptom of the stream stopping, not a value mutation. It is
-produced by the action operators `drop`, `suspend_source`, or `delay` so that
-the receive age exceeds the configured missing-packet timeout $\tau_\mathrm{stale}$
-(Open point D).
+HOTSPOT / VIOLATION:
+    H_obs > L_H
+```
 
-**Drop / suspend:** `drop(n)` removes $n$ consecutive battery frames, leaving a
-gap of $(n+1)\,\Delta t$ between the surrounding frames. The minimum is
-$n \ge \lceil \tau_\mathrm{stale}/\Delta t \rceil$; a margin of a few frames is
-recommended. With $\Delta t = 0.1\,\mathrm s$:
+For fixed `temp_avg`:
 
-- $\tau_\mathrm{stale} = 0.5\,\mathrm s$ (current `guardian_model.yaml`)
-  $\rightarrow n \ge 5$, recommend $n \ge 10$;
-- $\tau_\mathrm{stale} = 2.0\,\mathrm s$ (model-doc proposal, Open point D)
-  $\rightarrow n \ge 20$.
+$$
+T_{\max}^{*}=T_{\mathrm{avg}}+H_{\mathrm{target}}.
+$$
 
-**Delay:** `retime(\Delta t)` shifts the timestamps after a point by more than
-$\tau_\mathrm{stale}$ without deleting frames (the canonical instance uses
-`delay_ms = 750`). **Truncation:** dropping the tail leaves the stream stale
-indefinitely; a mid-stream gap produces stale $\rightarrow$ cleared.
+To increase hotspot while preserving spread, a combination mutation may shift
+`temp_max` and `temp_min` together by the same amount.
 
-*Attribution note:* the Guardian cannot distinguish the injected root cause; a
-gap may correspond to `source.dropout` or a deferred `transport.*` fault. The
-ground-truth record (§10) carries the injected class.
+Again, the complete candidate must be forward-verified because changing
+`temp_max` or `temp_avg` may also affect thermal-limit, spread, and rate rules.
 
-*Dependency:* the replay must honor ASC timestamps; a fixed-rate replay
-produces no receive-time gap.
+### 9.6 Temperature rate / spike
 
-## 9. Complete mutation pipeline
+For each temperature signal:
+
+$$
+\dot T_i
+=
+\frac{T_{i,k}-T_{i,k-1}}{\Delta t_k}.
+$$
+
+Heating limit:
+
+$$
+R_{\uparrow,\mathrm{base}}
+=
+R_{\uparrow,\mathrm{cold}}
+-
+(R_{\uparrow,\mathrm{cold}}-R_{\uparrow,\mathrm{hot}})
+\theta(T_{\mathrm{avg},k-1}).
+$$
+
+If SoC coupling is enabled:
+
+$$
+Q_k=
+\min
+\left(
+\left|
+\frac{SoC_k-SoC_{k-1}}{\Delta t_k}
+\right|,
+Q_{\mathrm{cap}}
+\right),
+$$
+
+$$
+R_\uparrow=
+R_{\uparrow,\mathrm{base}}+K_{SoC}Q_k.
+$$
+
+Cooling limit:
+
+$$
+R_\downarrow.
+$$
+
+Inverse heating target:
+
+```text
+RATE / WARNING:
+    u_warning * R_up <= dT/dt <= R_up
+
+RATE / VIOLATION:
+    dT/dt > R_up
+```
+
+Therefore:
+
+$$
+\Delta T_{\mathrm{target}}
+=
+R_{\mathrm{target}}\Delta t_k.
+$$
+
+For cooling use magnitudes:
+
+```text
+RATE / WARNING:
+    u_warning * R_down <= -dT/dt <= R_down
+
+RATE / VIOLATION:
+    -dT/dt > R_down
+```
+
+A `signal.spike` is an injected cause, not a Guardian detection class.
+
+The return edge of a one-frame spike must also be forward-evaluated because it
+may generate a second rate observation.
+
+### 9.7 SoC range
+
+Inverse conditions:
+
+```text
+SOC_RANGE / VIOLATION:
+    soc < soc.min_percent
+    OR
+    soc > soc.max_percent
+```
+
+Only DBC-representable directions are feasible.
+
+If the physical/DBC encoding cannot represent a value below zero, a low-range
+violation is `UNSATISFIABLE` for the ASC mutator and must not be faked.
+
+### 9.8 SoC rate
+
+Guardian model:
+
+$$
+\dot{SoC}_k=
+\frac{SoC_k-SoC_{k-1}}{\Delta t_k}
+$$
+
+with
+
+$$
+|\dot{SoC}_k|
+\le
+R_{SoC,\max}.
+$$
+
+Current configuration:
+
+$$
+R_{SoC,\max}=5\ \mathrm{pp/s}.
+$$
+
+Inverse violation:
+
+$$
+|SoC_k-SoC_{k-1}|
+>
+R_{SoC,\max}\Delta t_k.
+$$
+
+This check is binary in v1; there is no SoC-rate warning level.
+
+Do not use the obsolete fixed `0.5 pp/sample` rule.
+
+### 9.9 Stuck
+
+For temperature signal $T_i$ over $N$ samples:
+
+$$
+A_i=\max(T_i)-\min(T_i).
+$$
+
+The target must satisfy:
+
+$$
+A_i\le\epsilon_{\mathrm{stuck}}.
+$$
+
+Independent excitation must simultaneously satisfy:
+
+$$
+\max_{j\ne i}A_j\ge E_T
+\quad\lor\quad
+A_{SoC}\ge E_{SoC}.
+$$
+
+Therefore the mutator must construct **both**:
+
+1. a flat target trajectory;
+2. at least one independently excited peer trajectory.
+
+The peer trajectory must itself be checked against spread, hotspot, thermal and
+rate constraints.
+
+A case with all signals flat must not be accepted as a stuck case.
+
+### 9.10 Stream stale
+
+Guardian condition:
+
+$$
+age(t)>\tau_{\mathrm{stale}}.
+$$
+
+The stale test is periodic with evaluation interval
+$\tau_{\mathrm{eval}}$.
+
+For a robust source-gap case, construct a receive gap with margin:
+
+$$
+gap
+>
+\tau_{\mathrm{stale}}
++
+\tau_{\mathrm{eval}}.
+$$
+
+For nominal 100-ms source frames and the current model:
+
+```text
+stale timeout       = 500 ms
+evaluation period   = 100 ms
+```
+
+Use at least a 700-ms receive gap; campaign default should remain more
+conservative (for example 1 s).
+
+`STREAM_STALE` is a symptom only. `transport.delay`, `transport.drop`, and
+`source.dropout` remain distinct injected causes.
+
+A pure transport delay must preserve source-generation timestamps while
+delaying receipt. ASC timestamp retiming alone changes generation time and must
+not be mislabeled as pure transport delay.
+
+---
+
+## 10. Satisfiability and co-detections
+
+The mutator must explicitly model that not every requested observation pattern
+is realizable for every baseline state.
+
+Return:
+
+```text
+UNSATISFIABLE
+```
+
+when no DBC-representable trajectory satisfies all requested and forbidden
+constraints.
+
+Required structured reason examples:
+
+```yaml
+status: UNSATISFIABLE
+reason:
+  code: QUANTIZATION_CONFLICT
+  detail: no representable spread value lies inside requested WARNING band
+```
+
+```yaml
+status: UNSATISFIABLE
+reason:
+  code: FORBIDDEN_CODETECTION
+  detail: every representable spread drift also raises PHYSICAL_TEMP_RATE/WARNING
+```
+
+```yaml
+status: UNSATISFIABLE
+reason:
+  code: ENCODING_LIMIT
+  detail: requested SoC below-range value is not representable in the DBC
+```
+
+Do not silently relax the generation goal.
+
+### 10.1 Important current-model consequence
+
+At nominal 100 ms, one temperature quantum is:
+
+$$
+0.5^\circ\mathrm C / 0.1\,s
+=
+5^\circ\mathrm C/s.
+$$
+
+Cooling utilization for one negative quantum is:
+
+$$
+5/6\approx0.833.
+$$
+
+Therefore a one-quantum-per-frame downward drift already produces
+`PHYSICAL_TEMP_RATE / WARNING`.
+
+Likewise, at the hot-state heating limit:
+
+$$
+5/5=1.0,
+$$
+
+so one positive quantum per nominal frame also produces
+`PHYSICAL_TEMP_RATE / WARNING`.
+
+Consequently, recipes previously described as "isolated" purely because they
+stay below the violation threshold are **not isolated under the current warning
+semantics**.
+
+The solver must use the generation goal to decide whether such co-detections
+are allowed or make the request unsatisfiable.
+
+---
+
+## 11. Mutation operators and trajectory construction
+
+Canonical operator semantics come from `fault_injection_model.yaml`.
+
+### `stuck`
+
+```text
+one temperature signal
+duration_samples >= configured stuck window
+flat within epsilon_stuck
+requires independent peer excitation
+```
+
+### `spike`
+
+```text
+one signal
+temporary delta for duration_samples
+return edge is part of the generated trajectory and must be verified
+```
+
+### `drift`
+
+```text
+one signal
+quantized monotonic or piecewise-monotonic trajectory
+actual trajectory is solved from the generation goal
+```
+
+`rate_per_sample` is a requested operator parameter, not proof that the desired
+Guardian observation will occur.
+
+### `out_of_range`
+
+```text
+one signal
+target value outside configured admissible range
+value must remain DBC-representable
+```
+
+### `signal.combination`
+
+```text
+>= 2 distinct signal mutations
+all component mutations belong to one injection instance
+```
+
+Combination generation may be used to preserve non-target invariants while
+driving the requested one.
+
+---
+
+## 12. Search strategy
+
+A full nonlinear optimizer is not required for v1.
+
+Use deterministic bounded search around analytically derived targets:
+
+```text
+1. derive ideal continuous target;
+2. enumerate nearby quantized candidates;
+3. enumerate allowed signal combinations if needed;
+4. forward-evaluate each complete trajectory;
+5. choose the first candidate satisfying the generation goal;
+6. break ties deterministically using minimum mutation magnitude, then signal
+   order, then lexical operator order.
+```
+
+Recommended optimization objective:
+
+```text
+minimize:
+    total absolute signal modification
+then:
+    number of mutated signals
+then:
+    mutation duration
+```
+
+Subject to satisfying the generation goal.
+
+The same seed, template, model, injection instance, and generation goal must
+produce the same output.
+
+---
+
+## 13. Forward model oracle
+
+The mutator and Guardian must use identical model semantics.
+
+Preferred implementation:
+
+```text
+shared pure battery-model library
+```
+
+containing:
+
+```text
+thermal normalization
+thermal thresholds
+spread limit
+hotspot limit
+temperature-rate limit
+SoC rate/range rules
+stuck rule
+classification boundaries
+```
+
+If code sharing is not practical, both implementations must execute the same
+versioned conformance vectors.
+
+Normative boundary vectors must include:
+
+```text
+utilization immediately below 0.8
+utilization exactly 0.8
+utilization exactly 1.0
+utilization immediately above 1.0
+
+temp_max immediately below warning threshold
+temp_max exactly warning threshold
+temp_max immediately below critical threshold
+temp_max exactly absolute_max_c
+temp_max strictly above absolute_max_c
+
+actual elapsed receive-time rate cases
+SoC rate cases
+stuck window / excitation cases
+```
+
+`utilization == 1.0` is `WARNING`, not `VIOLATION`.
+
+---
+
+## 14. Complete case-generation pipeline
 
 For each case:
 
-1. Parse the reference ASC and collect the battery frames (CAN `0x100`, DLC 8).
-2. Keep the first `lead_in_frames` frames byte-identical; read $x_0$ from the
-   last lead-in frame.
-3. Select the injection instance (`injected_class`, canonical operators and
-   parameters) from `fault_injection_model.yaml`; draw any randomization from
-   the recorded seed.
-4. Realize each canonical operator with the primitives of §3.5 over the work
-   region; extend the frame stream on the 100 ms grid if the pattern is longer
-   than the template.
-5. Render the mutated ASC (all non-battery lines byte-exact).
-6. Emit the ground-truth record (§10) with the executed `mutations[]` and
-   timing.
+1. parse the reference ASC;
+2. collect battery frames `0x100`, DLC 8;
+3. preserve the configured lead-in byte-identically;
+4. load and hash the exact Guardian model;
+5. load the injection instance;
+6. load the generation goal;
+7. derive inverse constraints;
+8. construct candidate quantized trajectories;
+9. forward-evaluate every candidate;
+10. reject candidates violating forbidden observations;
+11. emit `UNSATISFIABLE` if no candidate exists;
+12. render the selected mutated ASC;
+13. emit injection ground truth;
+14. emit test-oracle metadata;
+15. integration-test the generated replay against the real Guardian.
 
-<!-- TODO(D8): formalize the operator-to-frame mapping as pseudocode. -->
+---
 
-## 10. Ground-truth sidecar schema
+## 15. Ground-truth sidecar
 
-The record is the authoritative injection-side artifact
-(`fault_injection_model.yaml` + `battery_fault_contract.yaml` v3). It is
-**not** derived from Guardian output.
+Injection ground truth remains independent of Guardian output.
+
+Example:
 
 ```yaml
 run_id: <campaign run>
-injection_id: <instance id>
-injected_class: signal.spike
-started_at: <epoch wall clock, ISO-8601>
-duration_ms: 100            # or finished_at
-battery_model: product/config/battery_guardian/guardian_model.yaml
-mutations:                  # signal faults only
-  - signal: temp_max
-    operator: spike
-    parameters: { delta: 10.0, duration_samples: 1 }
+injection_id: spread-warning-001
+injected_class: signal.drift
+
+started_at: <ISO-8601>
+duration_ms: 700
+
+battery_model:
+  path: product/config/battery_guardian/guardian_model.yaml
+  sha256: <exact file hash>
+
+mutations:
+  - signal: temp_min
+    operator: drift
+    parameters:
+      direction: decrease
+      executed_values: [...]
 ```
 
-- Required: `injection_id`, `injected_class`, `started_at`; timing is either
-  `finished_at` or `duration_ms` (contract `require_one_of`).
-- Signal faults additionally require `mutations[]` with `signal`, `operator`,
-  `parameters`; a `signal.combination` carries the complete list.
-- `run_id` binds the record to the campaign run (contract
-  `campaign_ground_truth_event`).
-- `battery_model` names the model configuration the case was generated against
-  (§2.4); informative provenance beyond the contract's required fields.
-- Time base: `started_at` is **epoch wall clock**, so it correlates with the
-  Guardian's `detected_at_ms`; the replay-relative `injected_at_ms` of the
-  prototype is superseded.
+For `signal.combination`, record all component mutations.
 
-<!-- TODO(D7): confirm the epoch/replay-relative decision and the collector's
-     correlation window. -->
+Do not write Guardian detections into injection ground truth.
 
-## 11. Mapping to the v1 fault campaign
+---
 
-Illustrative injection -> observation relations (not a diagnostic mapping;
-the Guardian must not infer the injected class). This mirrors
-`product/config/battery_guardian/README.md`.
+## 16. Test-oracle sidecar
 
-| Injected class | Typical observation(s) |
-|---|---|
-| `signal.spike` | `PHYSICAL_TEMP_RATE / WARNING`, later `/ VIOLATION` |
-| `signal.drift` | `PHYSICAL_TEMP_HOTSPOT / WARNING`, `PHYSICAL_TEMP_SPREAD / WARNING`, later the corresponding `VIOLATION`s |
-| `signal.out_of_range` | `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION` |
-| `signal.stuck` | `SIGNAL_STUCK / VIOLATION` |
-| `signal.combination` | zero, one, or multiple observations |
-| coherent temperature increase (no injection class yet) | `THERMAL_LIMIT / WARNING`, later `/ CRITICAL` |
-| `transport.delay` / `transport.drop` / `source.dropout` | `STREAM_STALE / VIOLATION` |
+Keep expected Guardian behavior in a separate oracle section/artifact:
 
-## 12. Compact mutator parameter block
+```yaml
+generation_goal:
+  primary:
+    - class: PHYSICAL_TEMP_SPREAD
+      level: WARNING
+
+  allowed:
+    - class: PHYSICAL_TEMP_RATE
+      level: WARNING
+
+  forbidden:
+    - class: PHYSICAL_TEMP_SPREAD
+      level: VIOLATION
+    - class: PHYSICAL_TEMP_ABSOLUTE_LIMIT
+      level: VIOLATION
+```
+
+Also record the model-predicted trigger samples / intervals when useful.
+
+The integration test passes only when the real Guardian output conforms to this
+oracle.
+
+---
+
+## 17. Example: inverse spread warning
+
+Assume baseline:
+
+```text
+temp_min = 42.0
+temp_avg = 47.0
+temp_max = 49.0
+```
+
+First compute:
+
+$$
+\theta=\theta(47)
+$$
+
+and:
+
+$$
+L_S=S(47).
+$$
+
+For warning target utilization:
+
+$$
+u_t=0.9.
+$$
+
+Choose:
+
+$$
+S_{\mathrm{target}}=0.9L_S.
+$$
+
+If mutating only `temp_min`:
+
+$$
+T_{\min}^{*}=49.0-S_{\mathrm{target}}.
+$$
+
+Then:
+
+1. enumerate nearby 0.5 °C representable values;
+2. recompute actual spread utilization;
+3. compute temporal rate against the preceding received sample;
+4. evaluate ordering, hotspot, thermal limit, absolute limit, SoC and stuck;
+5. accept only if the complete generation goal is satisfied.
+
+If every representable `temp_min` value in the warning band causes a forbidden
+rate warning, return `UNSATISFIABLE` or retry with an allowed combination
+mutation if the injection class permits it.
+
+---
+
+## 18. Example: inverse spread violation
+
+Compute $L_S$ from the current `temp_avg`.
+
+Select the smallest representable spread satisfying:
+
+$$
+S_{\mathrm{obs}}>L_S
+$$
+
+plus the configured mutator guard margin.
+
+For `temp_min` mutation:
+
+$$
+T_{\min}^{*}=T_{\max}-S_{\mathrm{obs}}.
+$$
+
+Forward-verify the result.
+
+Do not assume that "one extra quantum" is always sufficient after the model is
+re-evaluated; changing `temp_avg` in a combination mutation changes $L_S$
+itself.
+
+---
+
+## 19. Example: coherent thermal warning
+
+Requested observation:
+
+```text
+THERMAL_LIMIT / WARNING
+```
+
+with no spread/hotspot violation.
+
+Target:
+
+$$
+60\le T_{\max}<70.
+$$
+
+Use a `signal.combination` and construct a common-mode shift:
+
+$$
+T_{\min}^{*}=T_{\min}+\Delta,
+$$
+
+$$
+T_{\mathrm{avg}}^{*}=T_{\mathrm{avg}}+\Delta,
+$$
+
+$$
+T_{\max}^{*}=T_{\max}+\Delta.
+$$
+
+This preserves instantaneous spread and hotspot differences.
+
+The generated trajectory must still be checked against temperature-rate
+warnings/violations. If a single-frame common-mode step would violate the rate
+goal, spread the shift over multiple frames or declare the requested oracle
+unsatisfiable under the specified operator constraints.
+
+---
+
+## 20. Compact mutator configuration
+
+Mutator-specific configuration should contain only generation mechanics:
 
 ```yaml
 case_mutator:
-  template: <reference>.asc
+  template: <reference.asc>
   output_dir: cases/<run_id>
   repetitions: 1
   lead_in_frames: 20
-  seed: 0                     # reproducible runs: same seed -> same output
+  seed: 0
 
-  sample_period_ms: 100
-  temperature_quantum_c: 0.5
-  soc_quantum_pp: 0.5
-
-  # Read-only input: the authoritative battery model (ADR-005/ADR-008). The
-  # generator consumes the keys listed in §2.4 and never redefines them.
   battery_model: product/config/battery_guardian/guardian_model.yaml
+
+  search:
+    warning_target_utilization: 0.90
+    violation_target_utilization: 1.10
+    max_candidate_quanta: 64
 ```
+
+Do not duplicate:
+
+```text
+Guardian thresholds
+spread/hotspot coefficients
+temperature-rate limits
+SoC limits
+stuck parameters
+stale timeout
+```
+
+Those are always read from `guardian_model.yaml`.
+
+---
+
+## 21. Acceptance criteria
+
+The mutator implementation is complete when:
+
+- it reads the authoritative Guardian model;
+- it accepts an explicit `generation_goal`;
+- it converts the requested `DetectionClass × DetectionLevel` into inverse
+  constraints;
+- it generates DBC-representable signal values / trajectories;
+- it distinguishes `WARNING`, `VIOLATION`, and `CRITICAL` correctly;
+- it uses actual elapsed-time semantics for dynamic constraints;
+- it supports coordinated `signal.combination` mutations;
+- it forward-verifies every generated candidate against the Guardian model;
+- it rejects forbidden co-detections;
+- it returns structured `UNSATISFIABLE` instead of silently relaxing the goal;
+- it emits injection ground truth independently of Guardian observations;
+- it records the exact Guardian-model path and hash;
+- it is deterministic for identical input, model, seed, injection and goal;
+- generated integration cases reproduce the requested Guardian observations in
+  the real Guardian.

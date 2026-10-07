@@ -42,6 +42,11 @@ is not authoritative) — they do not become open issues here.
 - **Description**: Decided that every battery CAN message has a zero-based millisecond generation timestamp preserved into BatteryTempEvent; the Evidence Collector subscribes to battery events, every raw Guardian decision, and the independently produced DFM/OpenSOVD messages.
 - **Notes**: ADR-004/007/008/009/010 and key facts now define the three evidence planes. Implementation still needs to replace bridge wall-clock timestamps, retain the source timestamp in the Guardian, use source-timestamp gaps for drop detection, define the raw GuardianEvidenceEvent URI/RID and payload contract, publish all detection transitions before DFM mapping, and add the Evidence Collector subscriptions.
 
+### 2026-10-07 - Reconcile Case Mutator specification with Guardian model
+- **Status**: In Progress
+- **Description**: Updated the mutator specification to consume and validate the canonical Guardian model, record its content hash, use shared conformance vectors, and reflect source timestamps plus the three Evidence Collector views.
+- **Notes**: Corrected stale timeout, rate-boundary, stuck-target and combination wording without changing model semantics. Open decisions remain for mutation-layer attribution, ground-truth time bases, timestamp-gap detection output, executable classes not present in the injection vocabulary, and the conflicting SoC step/rate definitions.
+
 ### 2026-10-06 - Component & channel specification (product/doc/architecture)
 - **Status**: In Progress
 - **Description**: Draft `product/doc/architecture/components_and_channels.md`: component overview (C1–C15), edge overview (E1–E18), short per-component/channel specs, and option analyses for mitigation, DFM IPC transport, `run_id` entry, collector correlation and report generation.
