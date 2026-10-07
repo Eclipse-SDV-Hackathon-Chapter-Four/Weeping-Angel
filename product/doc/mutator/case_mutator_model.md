@@ -105,8 +105,6 @@ seed: 0
 The exact Guardian model file must be loaded at generation time and treated as
 read-only input. The mutator must not duplicate or override Guardian thresholds.
 
-Record the SHA-256 hash of the model file in every generated case.
-
 ---
 
 ## 4. Canonical injected fault classes
@@ -400,8 +398,7 @@ generate_case(template, injection, generation_goal, model):
    13. If no representable candidate exists:
          return UNSATISFIABLE with a structured reason.
 
-   14. Emit the mutated ASC, injection ground truth, model provenance,
-       and test oracle.
+   14. Emit the mutated ASC, injection ground truth, and test oracle.
 ```
 
 Step 10 is mandatory even for analytically invertible rules.
@@ -1020,7 +1017,7 @@ For each case:
 1. parse the reference ASC;
 2. collect timestamped battery frames `0x100`, DLC 16;
 3. preserve the configured lead-in byte-identically;
-4. load and hash the exact Guardian model;
+4. load the exact Guardian model;
 5. load the injection instance;
 6. load the generation goal;
 7. derive inverse constraints;
@@ -1051,7 +1048,6 @@ duration_ms: 700
 
 battery_model:
   path: product/config/battery_guardian/guardian_model.yaml
-  sha256: <exact file hash>
 
 mutations:
   - signal: temp_min
@@ -1265,7 +1261,7 @@ The mutator implementation is complete when:
 - it rejects forbidden co-detections;
 - it returns structured `UNSATISFIABLE` instead of silently relaxing the goal;
 - it emits injection ground truth independently of Guardian observations;
-- it records the exact Guardian-model path and hash;
+- it records the Guardian-model path used for generation;
 - it is deterministic for identical input, model, seed, injection and goal;
 - generated integration cases reproduce the requested Guardian observations in
   the real Guardian.

@@ -80,7 +80,7 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 ### C2 — Case Mutator / Fault Injector
 - **I/O:** in E14 (v2); out E1 (`.asc`), E13 (`.json`). Deterministic (byte-identical).
 - **Implemented:** `overtemperature`; other classes fail-closed stubs.
-- **Ground truth:** `run_id`, `injection_id`, `injected_class`, `injected_at_ms`, provenance.
+- **Ground truth:** `run_id`, `injection_id`, `injected_class`, `injected_at_ms`, and executed mutation parameters. Campaign artifacts do not carry file or configuration hashes.
 - **Notes:** no sequence numbers. Value/signal classes only.
 
 ### C3 — KUKSA CAN Provider

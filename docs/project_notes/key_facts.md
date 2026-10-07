@@ -58,12 +58,22 @@ Never store credentials here — this file is committed to git.
 ## Product Case Mutator
 
 - Component: `product/components/case_mutator/`; Rust binary `case-mutator`
-- Reads an explicit generation request, the canonical fault-injection instance and the exact `guardian_model.yaml`; records the model SHA-256 in every case
+- Reads an explicit generation request, the canonical fault-injection instance and the configured `guardian_model.yaml`; ADR-012 removes model, configuration, trace, and artifact hashes from the target campaign artifacts, while the current implementation still emits a model SHA-256 pending reconciliation
 - Uses the real `battery-guardian` Rust model/runtime as its forward oracle rather than maintaining a second detection implementation
 - Supports all canonical v1 classes: stuck, spike, drift, out-of-range, signal combination, transport delay/drop, and source dropout
 - Emits mutated ASC, independent injection ground truth, and a Guardian test-oracle sidecar; impossible goals produce structured `UNSATISFIABLE`
 - Preserves non-target ASC lines byte-exactly and never rebases embedded source timestamps on drop; transport delay changes replay time while preserving generation time
-- Dev-container `make check` passes formatting, Clippy with warnings denied, 4 unit tests and 5 end-to-end generation tests
+- Dev-container `make check` passes formatting, Clippy with warnings denied, 5 unit tests and 5 end-to-end generation tests
+
+## Battery Campaign Test Harness
+
+- Normative discussion specification: `product/doc/testing/battery_campaign_test_harness.md`
+- Five version-controlled 20-second reference scenarios at the nominal 100-ms cycle: three nominal operating states (`cold_nominal`, `warm_nominal`, `hot_nominal`) and two genuine fault states (`overtemp_fault`, `hotspot_fault`)
+- Initial elementary-fault campaigns mutate only the three nominal scenarios; the two fault scenarios are unmodified positive regression runs until combined-fault testing is explicitly specified
+- One campaign represents one canonical injected fault class; each generated experiment ASC contains five separated incidents of that class with explicit recovery intervals and per-incident expectations
+- Warning expectations are valid only for Guardian checks that define warnings; binary checks use subthreshold/boundary/violation-style cases rather than inventing warning levels
+- The harness pre-generates experiment bundles containing the ASC replay, injection ground truth, and oracle. No hash or provenance artifact is generated
+- Future execution runs one experiment at a time and correlates battery input, raw Guardian decisions, and DFM/OpenSOVD evidence; verdicts are `PASS`, `FAIL`, or `INCONCLUSIVE`
 
 ## Evidence Collector
 
