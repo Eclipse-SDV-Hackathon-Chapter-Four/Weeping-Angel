@@ -78,6 +78,8 @@ enum Record {
 struct BatteryRecord {
     original: String,
     token_spans: Vec<(usize, usize)>,
+    /// Index of the first payload-byte token (classic CAN: 6, CAN FD: 9).
+    data_start: usize,
     payload: Vec<u8>,
     arrival_ms: u64,
     original_arrival_ms: u64,
@@ -178,7 +180,7 @@ impl BatteryRecord {
             format!("{:.6}", self.arrival_ms as f64 / 1_000.0),
         ));
         for (index, byte) in self.payload.iter().enumerate() {
-            replacements.push((self.token_spans[6 + index], format!("{byte:02X}")));
+            replacements.push((self.token_spans[self.data_start + index], format!("{byte:02X}")));
         }
         replacements.sort_by_key(|(span, _)| std::cmp::Reverse(span.0));
 
@@ -196,28 +198,41 @@ fn parse_record(line: &str, line_number: usize) -> Result<Record> {
         return Ok(Record::Raw(line.to_owned()));
     }
     let token = |index: usize| &line[spans[index].0..spans[index].1];
-    let Ok(frame_id) = u32::from_str_radix(token(2), 16) else {
+    // Classic CAN: `<t> <ch> <id> Rx d <dlc hex> <data...>`
+    // CAN FD:      `<t> CANFD <ch> Rx <id> <brs> <esi> <dlc code> <length dec> <data...>`
+    let is_fd = token(1) == "CANFD";
+    let (id_index, data_start) = if is_fd { (4, 9) } else { (2, 6) };
+    if spans.len() < data_start {
+        return Ok(Record::Raw(line.to_owned()));
+    }
+    let Ok(frame_id) = u32::from_str_radix(token(id_index), 16) else {
         return Ok(Record::Raw(line.to_owned()));
     };
-    if frame_id != BATTERY_FRAME_ID || token(4) != "d" {
+    if frame_id != BATTERY_FRAME_ID || (!is_fd && token(4) != "d") {
         return Ok(Record::Raw(line.to_owned()));
     }
 
-    let dlc = usize::from_str_radix(token(5), 16)
-        .with_context(|| format!("line {line_number}: invalid hexadecimal DLC"))?;
+    let dlc = if is_fd {
+        token(8)
+            .parse::<usize>()
+            .with_context(|| format!("line {line_number}: invalid CAN FD data length"))?
+    } else {
+        usize::from_str_radix(token(5), 16)
+            .with_context(|| format!("line {line_number}: invalid hexadecimal DLC"))?
+    };
     if dlc < PAYLOAD_BYTES {
         bail!(
             "line {line_number}: battery payload has {dlc} bytes; timestamped canonical frame requires at least {PAYLOAD_BYTES}"
         );
     }
-    if spans.len() < 6 + dlc {
+    if spans.len() < data_start + dlc {
         bail!("line {line_number}: DLC declares {dlc} bytes but line is shorter");
     }
 
     let mut payload = Vec::with_capacity(dlc);
     for index in 0..dlc {
         payload.push(
-            u8::from_str_radix(token(6 + index), 16)
+            u8::from_str_radix(token(data_start + index), 16)
                 .with_context(|| format!("line {line_number}: invalid payload byte {index}"))?,
         );
     }
@@ -236,6 +251,7 @@ fn parse_record(line: &str, line_number: usize) -> Result<Record> {
     Ok(Record::Battery(BatteryRecord {
         original: line.to_owned(),
         token_spans: spans,
+        data_start,
         payload,
         arrival_ms,
         original_arrival_ms: arrival_ms,
@@ -336,6 +352,26 @@ mod tests {
     fn unmodified_document_round_trips_byte_exactly() {
         let document = AscDocument::parse(ASC).unwrap();
         assert_eq!(document.render(), ASC);
+    }
+
+    #[test]
+    fn can_fd_lines_round_trip_and_mutate() {
+        let asc = " 0.100000 CANFD   1 Rx        100                                   0 0 a 16 \
+                   64 00 00 00 8D 00 91 00 83 00 A0 00 00 00 00 00        0    0     1000        0        0        0        0        0\n";
+        let mut document = AscDocument::parse(asc).unwrap();
+        assert_eq!(document.render(), asc);
+        let mut frames = document.battery_frames();
+        assert_eq!(frames[0].source_ms, 100);
+        assert_eq!(frames[0].values.temp_max, 32.5);
+
+        frames[0].values.temp_max = 40.0;
+        document.apply_frames(&frames).unwrap();
+        let rendered = document.render();
+        assert!(rendered.contains(" CANFD "));
+        assert!(rendered.ends_with("0        0        0        0        0\n"));
+        let frame = &AscDocument::parse(&rendered).unwrap().battery_frames()[0];
+        assert_eq!(frame.source_ms, 100);
+        assert_eq!(frame.values.temp_max, 40.0);
     }
 
     #[test]

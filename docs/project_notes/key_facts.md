@@ -79,7 +79,7 @@ Never store credentials here — this file is committed to git.
 
 ## Product CAN Assets (`product/config/`)
 
-- Frame 0x100 `BatteryTemperature` is the timestamped 16-byte product frame: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged; `TimeStamp` is the pipeline-wide common time base (ADR-011, ADR-013)
+- Frame 0x100 `BatteryTemperature` is the timestamped 16-byte product frame: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged; `TimeStamp` is the pipeline-wide common time base (ADR-011, ADR-013); stored in the ASC as CAN FD lines (`CANFD … 0 0 a 16 <bytes>`), since classic CAN lines are truncated to 8 bytes on replay
 - `battery_temp_with_ts.asc` starts source time at 0 ms; value mutation and frame deletion preserve all remaining embedded timestamps unchanged
 - Temperature and SoC quantization are 0.5 °C and 0.5 pp; nominal generation period is 100 ms
 

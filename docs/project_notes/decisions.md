@@ -283,8 +283,8 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - Several failures may legitimately occur during one case, also before the injection.
 
 **Decision:**
-- The collector subscribes to `//guardian/1001/1/8001` and `//battery-vss/9001/1/9001`; each fault event is placed at the `timestamp_ms` of the latest battery event, rebased to the first battery event (ADR-008 source timeline).
-- Ground truth is the mutator record (`<prefix>.json`); `started_at`/`finished_at` are ms on that timeline (`finished_at` or `started_at + duration_ms`).
+- The collector subscribes to `//guardian/1001/1/8001` and `//battery-vss/9001/1/9001`; each fault event is placed at the `timestamp_ms` of the latest battery event, rebased to the first battery event (ADR-013 relative timeline).
+- Ground truth is the case mutator record `<prefix>.ground_truth.yaml` (fallback `<prefix>.json`); the window is `source_started_at_ms`..`source_finished_at_ms` on that timeline. The mutator's epoch `started_at` is informational only.
 - An injection passes if a non-baseline `Failed` event of an expected class arrives within `started_at <= t <= finished_at`; failures outside the window are allowed and reported. A baseline case passes only without failures.
 - Expected classes per injected class live in the collector (`product/components/evidence_collector/expected_observations.yaml`) as evaluation knowledge, not as a diagnostic mapping; an empty list (e.g. `signal.combination`) yields INCONCLUSIVE.
 
@@ -295,7 +295,6 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 **Consequences:**
 - ✅ Deterministic window check on one shared timeline; works with today's wall-clock bridge via rebasing.
 - ❌ Only DFM-mapped class/level pairs reach 8001; utilization warnings are invisible until the raw `GuardianEvidenceEvent` stream (ADR-007) exists.
-- ❌ The mutator doc's epoch `started_at` (TODO D7) must switch to source-timeline ms.
 
 ### ADR-013: Relative timestamps as the pipeline-wide common time base (2026-10-07) — Supersedes ADR-008; supersedes the receive-time base clause of ADR-004
 

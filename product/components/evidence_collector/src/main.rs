@@ -1,7 +1,9 @@
 //! Evidence collector.
 //!
-//! Started with a case prefix: reads the ground-truth record `<prefix>.json`
-//! and the replay `<prefix>.asc`, then listens on uProtocol to
+//! Started with a case prefix: reads the ground-truth record
+//! `<prefix>.ground_truth.yaml` (case mutator output; `<prefix>.json` as
+//! fallback, e.g. `[]` for a baseline) and the replay `<prefix>.asc`, then
+//! listens on uProtocol to
 //! - `GuardianFaultEvent` (`//guardian/1001/1/8001`): fault-level changes, and
 //! - `BatteryTempEvent` (`//battery-vss/9001/1/9001`): the battery stream.
 //!
@@ -11,8 +13,10 @@
 //!
 //! An injection passes if a non-baseline `Failed` event of an expected class
 //! (`expected_observations.yaml`) arrives within
-//! `started_at <= t <= finished_at` (or `started_at + duration_ms`), both in ms
-//! on that timeline. Other failures, before or after, are allowed and reported.
+//! `source_started_at_ms <= t <= source_finished_at_ms`, both in ms on that
+//! timeline (hand-written records may use a numeric `started_at` with
+//! `finished_at` or `duration_ms` instead; the mutator's epoch `started_at` is
+//! informational). Other failures, before or after, are allowed and reported.
 //! A case without injections (baseline) passes only without any failure.
 //!
 //! Collection stops once the battery timeline reaches the end of the replay
@@ -96,21 +100,45 @@ struct Injection {
     run_id: Option<String>,
     injection_id: String,
     injected_class: String,
-    /// ms on the battery source timeline.
-    started_at: u64,
+    /// Injection window in ms on the battery source timeline (case mutator).
+    #[serde(default)]
+    source_started_at_ms: Option<u64>,
+    #[serde(default)]
+    source_finished_at_ms: Option<u64>,
+    /// Epoch wall clock from the case mutator (informational), or ms on the
+    /// source timeline in hand-written records.
+    #[serde(default)]
+    started_at: Option<serde_yaml::Value>,
     #[serde(default)]
     finished_at: Option<u64>,
     #[serde(default)]
     duration_ms: Option<u64>,
+    /// `[start, finish]` in ms on the source timeline, derived when parsing.
+    #[serde(skip)]
+    window: (u64, u64),
 }
 
 impl Injection {
-    fn finished(&self) -> Result<u64> {
-        match (self.finished_at, self.duration_ms) {
-            (Some(f), _) => Ok(f),
-            (None, Some(d)) => Ok(self.started_at + d),
-            (None, None) => bail!("{}: needs finished_at or duration_ms", self.injection_id),
+    /// Window on the source timeline: `source_started_at_ms`/`source_finished_at_ms`,
+    /// else a numeric `started_at` with `finished_at` or `duration_ms`.
+    fn source_window(&self) -> Result<(u64, u64)> {
+        let id = &self.injection_id;
+        let start = match (self.source_started_at_ms, &self.started_at) {
+            (Some(s), _) => s,
+            (None, Some(v)) => v.as_u64().with_context(|| {
+                format!("{id}: needs source_started_at_ms (started_at is not ms on the source timeline)")
+            })?,
+            (None, None) => bail!("{id}: needs source_started_at_ms"),
+        };
+        let finish = match (self.source_finished_at_ms, self.finished_at, self.duration_ms) {
+            (Some(f), _, _) | (None, Some(f), _) => f,
+            (None, None, Some(d)) => start + d,
+            (None, None, None) => bail!("{id}: needs source_finished_at_ms, finished_at or duration_ms"),
+        };
+        if finish < start {
+            bail!("{id}: finished before it started");
         }
+        Ok((start, finish))
     }
 }
 
@@ -126,12 +154,9 @@ fn parse_ground_truth(src: &str) -> Result<Vec<Injection>> {
     records
         .into_iter()
         .map(|r| {
-            let inj: Injection = serde_yaml::from_value(r).context(
-                "invalid ground-truth record (started_at/finished_at must be ms on the battery timeline)",
-            )?;
-            if inj.finished()? < inj.started_at {
-                bail!("{}: finished before it started", inj.injection_id);
-            }
+            let mut inj: Injection =
+                serde_yaml::from_value(r).context("invalid ground-truth record")?;
+            inj.window = inj.source_window()?;
             Ok(inj)
         })
         .collect()
@@ -248,7 +273,7 @@ fn evaluate(
     let results = injections
         .iter()
         .map(|inj| {
-            let (start, finish) = (inj.started_at, inj.finished().unwrap_or(inj.started_at));
+            let (start, finish) = inj.window;
             let expected = expectations.get(&inj.injected_class).cloned().unwrap_or_default();
             let hit = failures().find(|f| {
                 expected.contains(&f.event.detection_class)
@@ -347,7 +372,14 @@ async fn run() -> Result<Verdict> {
     let expectations: Expectations =
         serde_yaml::from_str(&expectations_src).context("parsing expectations")?;
 
-    let sidecar = format!("{}.json", args.prefix);
+    let candidates = [
+        format!("{}.ground_truth.yaml", args.prefix),
+        format!("{}.json", args.prefix),
+    ];
+    let sidecar = candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .with_context(|| format!("no ground truth: neither {} nor {}", candidates[0], candidates[1]))?;
     let injections = parse_ground_truth(
         &fs::read_to_string(&sidecar).with_context(|| format!("reading {sidecar}"))?,
     )
@@ -573,15 +605,49 @@ mod tests {
     fn ground_truth_formats() {
         assert!(parse_ground_truth("[]").unwrap().is_empty());
         assert!(parse_ground_truth("").unwrap().is_empty());
-        assert_eq!(parse_ground_truth(STUCK).unwrap()[0].finished().unwrap(), 7000);
-        let yaml = "injection_id: s\ninjected_class: signal.spike\nstarted_at: 100\nfinished_at: 200\n\
-                    mutations:\n  - {signal: temp_max, operator: spike, parameters: {delta: 10.0}}\n";
-        assert_eq!(parse_ground_truth(yaml).unwrap()[0].finished().unwrap(), 200);
-        let epoch = r#"{"injection_id": "s", "injected_class": "signal.spike",
-                        "started_at": "2026-10-07T12:00:00Z", "duration_ms": 100}"#;
-        assert!(parse_ground_truth(epoch).is_err());
+        assert_eq!(parse_ground_truth(STUCK).unwrap()[0].window, (5000, 7000));
+        let yaml = "injection_id: s\ninjected_class: signal.spike\nstarted_at: 100\nfinished_at: 200\n";
+        assert_eq!(parse_ground_truth(yaml).unwrap()[0].window, (100, 200));
+        let epoch_only = r#"{"injection_id": "s", "injected_class": "signal.spike",
+                             "started_at": "2026-10-07T12:00:00Z", "duration_ms": 100}"#;
+        assert!(parse_ground_truth(epoch_only).is_err());
         let untimed = r#"{"injection_id": "s", "injected_class": "signal.spike", "started_at": 1}"#;
         assert!(parse_ground_truth(untimed).is_err());
+    }
+
+    /// Record as written by the case mutator (`<stem>.ground_truth.yaml`).
+    #[test]
+    fn case_mutator_ground_truth_uses_source_window() {
+        let yaml = "\
+run_id: r1
+injection_id: signal_out_of_range
+injected_class: signal.out_of_range
+started_at: 2026-10-07T12:00:00.000Z
+duration_ms: 1000
+source_started_at_ms: 2000
+source_finished_at_ms: 3000
+battery_model:
+  path: product/config/battery_guardian/guardian_model.yaml
+  sha256: sha256:abc
+mutations:
+- signal: temp_min
+  operator: out_of_range
+  requested_parameters:
+    value: -35.0
+    duration_samples: 10
+  executed_values: [-35.0]
+";
+        let inj = &parse_ground_truth(yaml).unwrap()[0];
+        assert_eq!(inj.window, (2000, 3000));
+        let r = evaluate(
+            "test",
+            std::slice::from_ref(inj),
+            &expectations(),
+            END,
+            &stream(0, &[(2500, fault("PHYSICAL_TEMP_ABSOLUTE_LIMIT", Stage::Failed))]),
+        );
+        assert_eq!(r.verdict, Verdict::Pass);
+        assert_eq!(r.injections[0].latency_ms, Some(500));
     }
 
     #[test]

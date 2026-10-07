@@ -55,7 +55,7 @@ is not authoritative) — they do not become open issues here.
 ### 2026-10-07 - Evidence Collector on GuardianFaultEvent stream
 - **Status**: In Progress
 - **Description**: Collector rewritten for contract v3 (ADR-012): subscribes to `//guardian/1001/1/8001` + `//battery-vss/9001/1/9001`, mutator ground-truth record, window verdict, `expected_observations.yaml`.
-- **Notes**: 18 unit tests and fake-publisher Zenoh runs pass. Open: VSS bridge still sends wall-clock `timestamp_ms` (ADR-013); mutator `started_at` is epoch (D7); `signal.combination` has no expectation; switch to raw `GuardianEvidenceEvent` once published.
+- **Notes**: 18 unit tests and fake-publisher Zenoh runs pass. Open: VSS bridge still sends wall-clock `timestamp_ms` (ADR-013); `signal.combination` has no expectation; switch to raw `GuardianEvidenceEvent` once published.
 
 ### 2026-10-07 - Adopt relative timestamps as the pipeline-wide common time base
 - **Status**: Open
@@ -66,3 +66,8 @@ is not authoritative) — they do not become open issues here.
 - **Status**: Resolved
 - **Description**: Added `product/scripts/plot-asc`, a small matplotlib script that decodes the 0x100 BatteryTemperature frame (little-endian payload: CellTempAvg/Max/Min at scale 0.5/offset -40, StateOfCharge at scale 0.5) and plots temperatures plus SoC. Defaults to `demo/can/battery_temp.asc`, accepts an optional path, and handles both the plain 8-byte demo file and the 12-byte `battery_temp_with_ts.asc`.
 - **Notes**: `flake.nix` devshell now provides `pkgs.python3.withPackages [ matplotlib ]` (Python 3.14.7, matplotlib 3.11.1); verified `nix develop --command python3 product/scripts/plot-asc` on both ASC files. No ADR change.
+
+### 2026-10-07 - Battery CAN frames as CAN FD
+- **Status**: Resolved
+- **Description**: `product/config/battery_temp_with_ts.asc` converted to CAN FD lines (16 bytes); classic CAN lines were cut to 8 bytes by python-can, losing `CellTempMin` and `StateOfCharge`. Case mutator parses/renders both line formats.
+- **Notes**: Replay via `product/components/start_can.sh` delivers all four signals; mutator and collector tests pass. Collector now reads the mutator's `<stem>.ground_truth.yaml` and its `source_started_at_ms`/`source_finished_at_ms` window.

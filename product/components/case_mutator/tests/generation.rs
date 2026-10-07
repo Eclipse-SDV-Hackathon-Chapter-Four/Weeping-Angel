@@ -69,8 +69,8 @@ fn transport_drop_preserves_source_timeline_and_predicts_stale() {
         panic!("drop case should be satisfiable");
     };
     let asc = fs::read_to_string(asc).unwrap();
-    assert!(!asc.contains("   2.000000 1  100"));
-    assert!(asc.contains("   4.000000 1  100"));
+    assert!(!asc.contains(" 2.000000 CANFD   1 Rx        100"));
+    assert!(asc.contains(" 4.000000 CANFD   1 Rx        100"));
     assert!(fs::read_to_string(oracle).unwrap().contains("STREAM_STALE"));
 }
 
