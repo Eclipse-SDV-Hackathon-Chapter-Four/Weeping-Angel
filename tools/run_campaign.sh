@@ -12,6 +12,8 @@
 #    reports/campaign-<timestamp>/<campaign>--<scenario>/, and a verdict
 #    summary to reports/campaign-<timestamp>/summary.txt.
 # Exit code: 0 if every experiment passed, 1 otherwise, 3 if build or generation failed.
+# Env: E2E_VENV (python env for harness + replay, self-provisioned),
+#      E2E_CASE_TIMEOUT_S (per-experiment collector deadline, default 240).
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,8 +22,14 @@ OUT="$ROOT/reports/campaign-$(date +%Y%m%d-%H%M%S)"
 EXPERIMENTS="$OUT/experiments"
 SUMMARY="$OUT/summary.txt"
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$OUT/logs"
 cd "$ROOT"
+
+# Shared self-provisioning: the harness needs pyyaml, the replay needs
+# cantools/python-can — one venv covers both (same convention as run_golden).
+source "$TOOLS/ensure_python_env.sh"
+ensure_python_env \
+  || { echo "run_campaign: python environment incomplete (E2E_VENV=${E2E_VENV:-$HOME/.venv})" >&2; exit 3; }
 
 # Always build (incremental): a binary older than the pulled config fails to start.
 echo "== building components"
@@ -35,6 +43,11 @@ echo "== generating experiments into $EXPERIMENTS"
 python3 product/components/battery_campaign_harness/harness.py generate \
   --output-dir "$EXPERIMENTS" "$@" \
   || { echo "run_campaign: generation failed" >&2; exit 3; }
+
+# Infra logs belong in the campaign dump, not /tmp (zenohd and databroker are
+# only started by run_case.sh if not already running; first start truncates).
+export ZENOH_LOG="$OUT/logs/zenohd.log"
+export DATABROKER_LOG="$OUT/logs/databroker.log"
 
 verdict_name() {
   case "$1" in

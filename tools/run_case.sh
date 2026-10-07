@@ -27,7 +27,8 @@ RUN_DIR="$ROOT/run"
 REPORT_ARGS=()
 [ $# -eq 2 ] && REPORT_ARGS=(--report "$2")
 COLLECTOR="$ROOT/product/components/evidence_collector/target/debug/evidence_collector"
-export ZENOH_CONNECT="tcp/127.0.0.1:7447"
+export ZENOH_CONNECT="${ZENOH_CONNECT:-tcp/127.0.0.1:7447}"
+E2E_CASE_TIMEOUT_S="${E2E_CASE_TIMEOUT_S:-240}"   # per-case collector deadline
 
 [ -f "$PREFIX.asc" ] || { echo "run_case: $PREFIX.asc not found" >&2; exit 3; }
 [ -f "$PREFIX.ground_truth.yaml" ] || [ -f "$PREFIX.json" ] \
@@ -43,6 +44,9 @@ echo "== building (if needed)"
 [ -x product/components/dfm_sovd_bridge/target/debug/dfm_sovd_bridge ] || bash "$TOOLS/build_dfm_sovd_bridge.sh"
 (cd product/components/evidence_collector && cargo build -q)   # always: cheap when up to date
 
+source "$TOOLS/ensure_python_env.sh"
+ensure_python_env || { echo "run_case: replay python environment incomplete (E2E_VENV=${E2E_VENV:-$HOME/.venv}, needs cantools/python-can/pyyaml)" >&2; exit 3; }
+
 cleanup() {
   echo "== stopping Guardian, VSS bridge, OpenSOVD bridge and DFM"
   bash "$TOOLS/stop_guardian.sh" >/dev/null 2>&1 || true
@@ -55,27 +59,63 @@ cleanup   # leftovers from an earlier run
 
 echo "== starting services"
 bash "$TOOLS/start_zenohd.sh"
+for _i in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null && break; sleep 0.5; done
+(exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null \
+  || { echo "run_case: zenohd never opened port 7447 (see ${ZENOH_LOG:-/tmp/zenohd.log})" >&2; exit 3; }
 pkill -x databroker 2>/dev/null && sleep 1 || true
 bash "$TOOLS/start_databroker.sh"
+for _i in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/55555) 2>/dev/null && break; sleep 0.5; done
+(exec 3<>/dev/tcp/127.0.0.1/55555) 2>/dev/null \
+  || { echo "run_case: databroker never opened port 55555 (see ${DATABROKER_LOG:-/tmp/databroker.log})" >&2; exit 3; }
 sleep 1
 bash "$TOOLS/run_dfm.sh"                        # fresh DFM storage per run
 sleep 2
 bash "$TOOLS/run_dfm_sovd_bridge.sh"
 bash "$TOOLS/run_vss_bridge.sh" >"$RUN_DIR/vss_bridge.log" 2>&1
+# Liveness: the bridge exits when the broker connection fails.
+for _i in $(seq 1 10); do
+  pgrep -x vss_publisher >/dev/null 2>&1 && break
+  sleep 0.5
+done
+pgrep -x vss_publisher >/dev/null 2>&1 \
+  || { echo "run_case: vss_publisher did not start (see $RUN_DIR/vss_bridge.log)" >&2; exit 3; }
 bash "$TOOLS/run_guardian.sh"
 
 echo "== collector listening, replaying $(basename "$PREFIX").asc (takes as long as the recording)"
 "$COLLECTOR" "$PREFIX" "${REPORT_ARGS[@]}" >"$RUN_DIR/collector.out" 2>"$RUN_DIR/collector.log" &
 collector_pid=$!
-sleep 1
+# Readiness: the collector prints "replay lasts ... ms" once it is subscribed;
+# replaying before that races the subscription and loses events.
+_subscribed=0
+for _i in $(seq 1 40); do
+  grep -q "replay lasts" "$RUN_DIR/collector.log" 2>/dev/null && { _subscribed=1; break; }
+  kill -0 "$collector_pid" 2>/dev/null || break
+  sleep 0.5
+done
+if [ "$_subscribed" != 1 ]; then
+  echo "run_case: collector never became ready (see $RUN_DIR/collector.log)" >&2
+  kill "$collector_pid" 2>/dev/null || true
+  exit 3
+fi
 bash "$TOOLS/start_can.sh" "$PREFIX.asc" >"$RUN_DIR/can.log" 2>&1 \
   || { echo "run_case: replay failed, see $RUN_DIR/can.log" >&2; kill "$collector_pid" 2>/dev/null; exit 3; }
 
 trap - ERR   # from here on the exit code is the collector's verdict
 set +e
-wait "$collector_pid"
+_waited=0 _timed_out=0
+while kill -0 "$collector_pid" 2>/dev/null; do
+  if [ "$_waited" -ge "$E2E_CASE_TIMEOUT_S" ]; then
+    echo "run_case: collector did not finish within ${E2E_CASE_TIMEOUT_S}s; killing (fail-closed)" >&2
+    _timed_out=1
+    kill "$collector_pid" 2>/dev/null || true
+    break
+  fi
+  sleep 1; _waited=$((_waited + 1))
+done
+wait "$collector_pid" 2>/dev/null
 verdict=$?
 set -e
+[ "$_timed_out" = 0 ] || { echo "run_case: TIMEOUT treated as INCONCLUSIVE" >&2; exit 2; }
 
 echo "== result"
 cat "$RUN_DIR/collector.out"
