@@ -9,8 +9,8 @@ wait_http() {   # wait_http <url> <label> [attempts]
   local url="$1" label="$2" attempts="${3:-10}" code
   for ((i = 0; i < attempts; i++)); do
     code="$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)"
-    if [[ "$code" == "200" ]]; then
-      log "$label is up"
+    if [[ "$code" == "200" || "$code" == "404" ]]; then
+      echo "$label is up"
       return 0
     fi
     sleep 0.5
@@ -33,4 +33,4 @@ else
     die "OpenSOVD binary $OPENSOVD_BIN not found, did you build it?" 
 fi
 
-printf "OpenSOVD Gateway up and running"
+echo "OpenSOVD Gateway up and running"
