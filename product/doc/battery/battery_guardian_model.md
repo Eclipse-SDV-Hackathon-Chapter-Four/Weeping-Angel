@@ -18,13 +18,31 @@ with temperature and SoC quantization of $0.5\,^\circ\mathrm C$ and $0.5$ percen
 
 The Guardian is deliberately **not** a detailed electro-thermal battery model. It checks a compact set of closed-form consistency constraints. Numeric values below are demonstrator parameters, not qualification limits for a particular battery chemistry.
 
-For temporal checks, the model uses the **actual elapsed receive time**
+Temporal checks use two distinct intervals that must not be conflated
+(ADR-013):
+
+- **Source/generation interval** — the difference of the relative generation
+  timestamps carried in each message:
 
 $$
-\Delta t_k=t^{recv}_k-t^{recv}_{k-1},
+\Delta\tau_k=ts_k-ts_{k-1}.
 $$
 
-not the nominal 100-ms period.
+This describes how the physical signal progressed on the source timeline and is
+the interval used by the dynamic temperature and SoC checks (§5, §6).
+
+- **Receive interval** — the difference of the local receive instants, projected
+  onto the same relative time base:
+
+$$
+\Delta t^{\mathrm{recv}}_k=t^{\mathrm{recv}}_k-t^{\mathrm{recv}}_{k-1}.
+$$
+
+This describes arrival, includes transport delay and jitter, and is used for
+freshness/age (§8), drop/jitter observation, and duplicate/reorder.
+
+The nominal 100-ms period is only the expected source cadence. Neither interval
+may be replaced by it.
 
 ---
 
@@ -251,7 +269,7 @@ For each $i\in\{\min,\mathrm{avg},\max\}$,
 $$
 \dot T_{i,k}
 =
-\frac{T_{i,k}-T_{i,k-1}}{\Delta t_k}.
+\frac{T_{i,k}-T_{i,k-1}}{\Delta\tau_k}.
 $$
 
 Use the **previous** average temperature for the state-dependent heating limit:
@@ -273,7 +291,7 @@ If enabled,
 
 $$
 \dot{SoC}_k=
-\frac{SoC_k-SoC_{k-1}}{\Delta t_k},
+\frac{SoC_k-SoC_{k-1}}{\Delta\tau_k},
 \qquad
 Q_k=\min(|\dot{SoC}_k|,2),
 $$
@@ -299,7 +317,7 @@ and classify $u_R=\mathrm{observed}/\mathrm{limit}$ with the generic 0.8/1.0 pol
 
 Class: `PHYSICAL_TEMP_RATE`.
 
-For the nominal 100-ms cycle the base positive step limit is 0.8 °C at the reference state and 0.5 °C at the hot state. This is illustrative only; runtime evaluation uses the actual $\Delta t_k$.
+For the nominal 100-ms cycle the base positive step limit is 0.8 °C at the reference state and 0.5 °C at the hot state. This is illustrative only; runtime evaluation uses the actual source/generation interval $\Delta\tau_k$.
 
 ![Nominal 100-ms base heating step](guardian_heating_step_limit_revised.png)
 
@@ -323,11 +341,11 @@ Violation raises `PHYSICAL_SOC_RANGE / VIOLATION`.
 
 ### Rate
 
-For consecutive **received** samples,
+For consecutive samples in source order,
 
 $$
 \dot{SoC}_k=
-\frac{SoC_k-SoC_{k-1}}{\Delta t_k}.
+\frac{SoC_k-SoC_{k-1}}{\Delta\tau_k}.
 $$
 
 Require
@@ -340,7 +358,7 @@ equivalently
 
 $$
 |SoC_k-SoC_{k-1}|
-\le5\,\Delta t_k.
+\le5\,\Delta\tau_k.
 $$
 
 Violation raises `PHYSICAL_SOC_RATE / VIOLATION`. The first sample has no temporal checks.
@@ -381,7 +399,8 @@ A positive result raises `SIGNAL_STUCK / VIOLATION`.
 
 ## 8. Stream freshness and evaluation
 
-Let $t_{\mathrm{last}}$ be the receive time of the last valid sample:
+Let $t_{\mathrm{last}}$ be the receive time of the last valid sample, projected
+onto the relative time base (ADR-013):
 
 $$
 a(t)=t-t_{\mathrm{last}}.
@@ -395,7 +414,9 @@ $$
 
 raise `STREAM_STALE / VIOLATION`.
 
-Freshness is checked periodically even without new input. Each received sample is physically evaluated at most once; the previous evaluated sample is retained for temporal checks.
+Freshness is a property of the receive axis ($\Delta t^{\mathrm{recv}}$, projected
+relative now), not of the source/generation interval $\Delta\tau$. Freshness is
+checked periodically even without new input. Each received sample is physically evaluated at most once; the previous evaluated sample is retained for temporal checks.
 
 The Guardian observes only the symptom:
 
@@ -416,7 +437,7 @@ For each new valid sample:
 1. classify `THERMAL_LIMIT`;
 2. check absolute bounds and ordering;
 3. evaluate spread and hotspot;
-4. if a previous sample exists, evaluate temperature and SoC rates using actual $\Delta t_k$;
+4. if a previous sample exists, evaluate temperature and SoC rates using the source/generation interval $\Delta\tau_k$;
 5. update and evaluate the stuck window;
 6. emit detection state transitions and project configured class/level pairs to DFM.
 
@@ -437,7 +458,9 @@ residual: 3.7
 utilization: 1.398
 ```
 
-Temporal evidence should additionally include the affected signal and actual $\Delta t_k$.
+Temporal evidence should additionally include the affected signal and the
+source/generation interval $\Delta\tau_k$ used for the dynamic check;
+freshness-related evidence instead reports the receive age $a(t)$.
 
 Injected faults are causes; Guardian detections are observations:
 

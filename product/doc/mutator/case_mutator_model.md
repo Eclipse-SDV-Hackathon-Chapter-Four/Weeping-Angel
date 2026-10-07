@@ -300,15 +300,22 @@ temperature quantum   = 0.5 °C
 SoC quantum           = 0.5 pp
 ```
 
-For dynamic Guardian rules, the relevant interval is the actual receive time:
+For dynamic Guardian rules, the relevant interval is the **source/generation
+interval**, i.e. the difference of the relative generation timestamps:
 
 $$
-\Delta t_k=t^{recv}_k-t^{recv}_{k-1}.
+\Delta\tau_k=ts_k-ts_{k-1}.
 $$
+
+This is the same interval the Guardian uses for its rate and dynamics checks
+(ADR-013). The receive interval $\Delta t^{\mathrm{recv}}_k$ and the resulting
+freshness/age are properties of arrival (transport/source timing), not of the
+signal values; the ASC mutator does not fabricate them and must not substitute
+them for $\Delta\tau_k$.
 
 Generation may initially assume the ASC schedule for candidate construction, but
-every candidate must be forward-verified using the same elapsed-time semantics
-as the Guardian.
+every candidate must be forward-verified using the Guardian's
+source/generation-interval semantics.
 
 All emitted signal values must be representable by the DBC.
 
@@ -597,7 +604,7 @@ For each temperature signal:
 $$
 \dot T_i
 =
-\frac{T_{i,k}-T_{i,k-1}}{\Delta t_k}.
+\frac{T_{i,k}-T_{i,k-1}}{\Delta\tau_k}.
 $$
 
 Heating limit:
@@ -618,7 +625,7 @@ Q_k=
 \min
 \left(
 \left|
-\frac{SoC_k-SoC_{k-1}}{\Delta t_k}
+\frac{SoC_k-SoC_{k-1}}{\Delta\tau_k}
 \right|,
 Q_{\mathrm{cap}}
 \right),
@@ -650,7 +657,7 @@ Therefore:
 $$
 \Delta T_{\mathrm{target}}
 =
-R_{\mathrm{target}}\Delta t_k.
+R_{\mathrm{target}}\Delta\tau_k.
 $$
 
 For cooling use magnitudes:
@@ -690,7 +697,7 @@ Guardian model:
 
 $$
 \dot{SoC}_k=
-\frac{SoC_k-SoC_{k-1}}{\Delta t_k}
+\frac{SoC_k-SoC_{k-1}}{\Delta\tau_k}
 $$
 
 with
@@ -712,7 +719,7 @@ Inverse violation:
 $$
 |SoC_k-SoC_{k-1}|
 >
-R_{SoC,\max}\Delta t_k.
+R_{SoC,\max}\Delta\tau_k.
 $$
 
 This check is binary in v1; there is no SoC-rate warning level.
@@ -784,6 +791,9 @@ conservative (for example 1 s).
 
 `STREAM_STALE` is a symptom only. `transport.delay`, `transport.drop`, and
 `source.dropout` remain distinct injected causes.
+
+The stale check uses the receive axis ($\Delta t^{\mathrm{recv}}$, projected
+relative now), never the source/generation interval $\Delta\tau$.
 
 A pure transport delay must preserve source-generation timestamps while
 delaying receipt. ASC timestamp retiming alone changes generation time and must
@@ -993,7 +1003,8 @@ temp_max immediately below critical threshold
 temp_max exactly absolute_max_c
 temp_max strictly above absolute_max_c
 
-actual elapsed receive-time rate cases
+source/generation-interval ($\Delta\tau$) rate cases
+receive-axis freshness cases (projected relative now)
 SoC rate cases
 stuck window / excitation cases
 ```
@@ -1248,7 +1259,7 @@ The mutator implementation is complete when:
   constraints;
 - it generates DBC-representable signal values / trajectories;
 - it distinguishes `WARNING`, `VIOLATION`, and `CRITICAL` correctly;
-- it uses actual elapsed-time semantics for dynamic constraints;
+- it uses the source/generation interval $\Delta\tau$ for dynamic constraints and the receive axis only for freshness/transport;
 - it supports coordinated `signal.combination` mutations;
 - it forward-verifies every generated candidate against the Guardian model;
 - it rejects forbidden co-detections;

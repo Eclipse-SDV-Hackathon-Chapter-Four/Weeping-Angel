@@ -73,7 +73,11 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Project memory stays free of demo-sample quirks logged as issues.
 - ❌ Demo code/docs can drift from decisions until reconciled — current decisions live in `decisions.md`, not in `demo/`.
 
-### ADR-004: Guardian uses receive-time periodic evaluation (2026-10-06)
+### ADR-004: Guardian uses receive-time periodic evaluation (2026-10-06) — Superseded by ADR-013 (time base)
+
+> The receive-time *time base* is superseded by ADR-013 (relative timestamps as
+> the pipeline-wide common time base). The separation of listener, periodic
+> evaluation and reporting is retained. Kept for the record.
 
 **Context:**
 - ADR-001 selected a future Guardian heartbeat as the time base, but the heartbeat event, URI, and publisher do not exist.
@@ -179,6 +183,11 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
 ### ADR-008: Source-relative generation timestamps accompany battery messages (amends ADR-004; payload placement amended by ADR-011) (2026-10-07)
 
+> Superseded by ADR-013, which elevates the source-relative timeline to the
+> pipeline-wide common time base instead of restricting it to identity,
+> correlation and drop detection. ADR-008's origin, zero-based and
+> preserve-unchanged rules are retained. Kept for the record.
+
 **Context:**
 - ADR-004 keeps the Guardian's model time base on receiver-side receive timestamps and dropped ADR-001's heartbeat.
 - Deterministic replay and evidence correlation need a source time that is shared by the CAN-side message, the uProtocol battery event, the Guardian and the Evidence Collector.
@@ -266,7 +275,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Transport delay can change ASC replay time without rewriting the embedded generation timestamp.
 - ❌ CAN provider/VSS mapping and bridge still need implementation work to propagate `TimeStamp` unchanged instead of generating wall-clock time.
 
-### ADR-011: Evidence Collector verdict on the Guardian fault-event stream (2026-10-07)
+### ADR-012: Evidence Collector verdict on the Guardian fault-event stream (2026-10-07)
 
 **Context:**
 - The Guardian publishes fault-level changes (`GuardianFaultEvent`) on `//guardian/1001/1/8001`; the events carry no time.
@@ -287,3 +296,110 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Deterministic window check on one shared timeline; works with today's wall-clock bridge via rebasing.
 - ❌ Only DFM-mapped class/level pairs reach 8001; utilization warnings are invisible until the raw `GuardianEvidenceEvent` stream (ADR-007) exists.
 - ❌ The mutator doc's epoch `started_at` (TODO D7) must switch to source-timeline ms.
+
+### ADR-013: Relative timestamps as the pipeline-wide common time base (2026-10-07) — Supersedes ADR-008; supersedes the receive-time base clause of ADR-004
+
+**Context:**
+- ADR-008 already carries a zero-based source-relative `timestamp_ms` from the
+  CAN message through `BatteryTempEvent` to the Guardian and Evidence Collector,
+  but restricts it to message identity, evidence correlation and drop detection.
+  ADR-004 keeps the Guardian's model base on local monotonic receive time.
+- That leaves two time notions in the system: the source-relative timeline for
+  correlation and the local receive clock for staleness/rate. Detection latency,
+  mitigation timing and ground-truth/evidence comparison are therefore not on
+  one axis, and their values depend on host scheduling and clock behaviour.
+- The challenge DoD requires deterministic, replayable campaigns with measurable
+  detection/mitigation timing, which needs a single deterministic time base.
+- A single relative base must still be able to observe receive-side silence
+  (transport delay/drop) and therefore needs an advancing "now" independent of
+  message arrival.
+
+**Decision:**
+- The **relative timestamp is the single common time base of the pipeline**.
+  - *Definition:* integer milliseconds on a zero-based, monotonically
+    non-decreasing, wall-clock-independent timeline; origin = replay/campaign
+    start `t0` (the first generated battery message is `0`). It is the only
+    timestamp semantics in the chain.
+  - *Origin and propagation:* generated at the source (CAN/replay) and preserved
+    unchanged through CAN Provider → Data Broker → VSS bridge →
+    `BatteryTempEvent.timestamp_ms` → Guardian → `GuardianEvidenceEvent` /
+    `GuardianFaultEvent` → DFM env data → Evidence Collector. No component
+    substitutes wall-clock, bridge or receive time for it.
+  - *Projected relative clock:* every consumer derives "now" on the relative
+    base by projecting its local monotonic clock with an offset calibrated from
+    the received relative timestamps. The projected clock is an implementation
+    detail of the single base, not a second time base; it is what lets
+    staleness/age advance while no messages arrive.
+  - *Two intervals, one base:* the model distinguishes the **source/generation
+    interval** `Δτ_k = ts_k − ts_{k−1}` (rate and thermal/SoC dynamics) from the
+    **receive interval** `Δt_recv_k`, projected onto the same relative base
+    (freshness/age, drop/jitter, duplicate/reorder). They share the relative
+    axis but are different quantities and must not be substituted for one
+    another. `received_at` stores the relative generation timestamp for model
+    state; the periodic evaluator's `now` is the projected relative time used
+    for freshness. Unexpected forward gaps in `ts` are missing generations
+    (drop) on the same axis.
+  - *Identity/ordering:* ADR-008's duplicate/reorder identity is retained: equal
+    timestamps = duplicate, decreasing timestamps = reorder/non-monotonicity.
+  - *Correlation:* ground-truth `injected_at_ms`, evidence `detected_at_ms` and
+    diagnostic times are all relative to the same `t0`; the collector correlates
+    by `run_id` + relative time and translates to wall clock only at the report
+    boundary.
+- No sequence numbers are introduced (ADR-001 stays in force): the relative
+  timestamp carries no per-message counter and exists solely as time.
+- This supersedes ADR-008 (its "not the model base" restriction is lifted) and
+  the receive-time base clause of ADR-004; ADR-008's origin, zero-based and
+  preserve-unchanged rules are retained.
+
+**Alternatives Considered:**
+- Keep the ADR-004/008 split (relative timeline for correlation, local receive
+  clock for the model) → Rejected: two axes, host-dependent timing, no common
+  base.
+- Local receive time only (ADR-004) → Rejected: no deterministic, replayable
+  timing; correlation stays wall-clock dependent.
+- Wall-clock/epoch timestamps (ADR-001/ADR-004) → Rejected: non-monotonic under
+  replay/pause and clock-skew sensitive.
+- Heartbeat counter (ADR-001) → Rejected: an added interface that is not a
+  continuous time measure.
+- Time base only in the ground-truth sidecar → Rejected: components drift apart
+  and correlation windows reappear.
+
+**Consequences:**
+- ✅ One deterministic, replayable time base; detection latency and mitigation
+  timing measured on a single axis.
+- ✅ Ground truth ↔ evidence ↔ DFM/OpenSOVD directly comparable by `run_id` +
+  relative time; host-clock skew removed.
+- ✅ Staleness and transport-delay detection remain possible on the relative axis
+  through the projected relative clock.
+- ✅ Ordering and duplicate/reorder identity come from the same field; no
+  sequence number is added.
+- ❌ Every interface must carry the relative timestamp; the KUKSA Data
+  Broker/VSS path is value-oriented and does not propagate per-sample timestamps
+  today → a defined mechanism is required (KUKSA value timestamp, bridge-side
+  reconstruction from the replay grid, or explicit relative metadata). Open.
+- ❌ Projected-clock calibration (offset estimation, drift, `t0` reset on replay
+  restart, pause/resume, late/out-of-order arrivals) must be specified;
+  non-monotonic input must be flagged, never silently used. Open.
+- ❌ DFM/OpenSOVD are "just use" components; whether they accept relative
+  timestamps or the collector translates at the boundary is open.
+- ❌ Existing code/docs on `Instant`/`SystemTime`/epoch and the mapped
+  `GuardianFaultEvent` path must be migrated; the in-progress work item "Align
+  source timestamps and Evidence Collector subscriptions" must be re-scoped.
+
+**Follow-up required by this ADR (scope):**
+- Interfaces: `battery_fault_contract.yaml` — `timestamp_ms` required/relative/
+  monotonic; Guardian evidence/fault and ground-truth timestamps on the same
+  base (replace epoch `started_at` semantics).
+- Docs: `battery_guardian_model.md` §1/§5/§6/§8–§10, `case_mutator_model.md`
+  §7/§9.10/§13/§21 and `components_and_channels.md` (time-base bullet, E5/E6,
+  resolved-decision table) updated to the Δτ (source) vs. Δt_recv (receive)
+  split/ADR-011; C7/C10 correlation and sidecar examples still open.
+- Config: reconcile `missing_packet_timeout_ms` (product 500 ms vs. demo/model
+  2.0 s, mutator open point D) during this migration; keep
+  `evaluation_period_ms`.
+- Code: Guardian `guardian_model.rs` (`received_at: Instant` → relative ms) and
+  `guardian_runtime.rs`; `guardian_uprotocol.rs` (parse `timestamp_ms`,
+  projected `now`); `vss_bridge` (drop `SystemTime` `now_ms()`, preserve the
+  replay-relative timestamp; mechanism TBD); DFM/collector projection onto the
+  base.
+- Memory: update `key_facts.md` timing facts and the `issues.md` work item.

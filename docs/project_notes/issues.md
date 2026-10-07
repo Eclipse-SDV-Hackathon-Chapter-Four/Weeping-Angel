@@ -45,7 +45,7 @@ is not authoritative) — they do not become open issues here.
 ### 2026-10-07 - Reconcile Case Mutator specification with Guardian model
 - **Status**: Resolved
 - **Description**: Implemented the Rust Case Mutator under `product/components/case_mutator` with bounded inverse search, quantization, real Guardian forward verification, ASC rendering, ground truth, oracle output, and structured unsatisfiable results.
-- **Notes**: All eight canonical v1 injections are covered by end-to-end generation tests. The Guardian and canonical configuration now use the specified 5 pp/s receive-time SoC rate. Product frame 0x100 is aligned as a timestamped 16-byte frame with a little-endian timestamp under ADR-011. Component and Guardian `make check` both pass in the dev container.
+- **Notes**: All eight canonical v1 injections are covered by end-to-end generation tests. The Guardian and canonical configuration now use the specified 5 pp/s source/generation-interval SoC rate (ADR-013). Product frame 0x100 is aligned as a timestamped 16-byte frame with a little-endian timestamp under ADR-011. Component and Guardian `make check` both pass in the dev container.
 
 ### 2026-10-06 - Component & channel specification (product/doc/architecture)
 - **Status**: In Progress
@@ -54,5 +54,15 @@ is not authoritative) — they do not become open issues here.
 
 ### 2026-10-07 - Evidence Collector on GuardianFaultEvent stream
 - **Status**: In Progress
-- **Description**: Collector rewritten for contract v3 (ADR-011): subscribes to `//guardian/1001/1/8001` + `//battery-vss/9001/1/9001`, mutator ground-truth record, window verdict, `expected_observations.yaml`.
-- **Notes**: 18 unit tests and fake-publisher Zenoh runs pass. Open: VSS bridge still sends wall-clock `timestamp_ms` (ADR-008); mutator `started_at` is epoch (D7); `signal.combination` has no expectation; switch to raw `GuardianEvidenceEvent` once published.
+- **Description**: Collector rewritten for contract v3 (ADR-012): subscribes to `//guardian/1001/1/8001` + `//battery-vss/9001/1/9001`, mutator ground-truth record, window verdict, `expected_observations.yaml`.
+- **Notes**: 18 unit tests and fake-publisher Zenoh runs pass. Open: VSS bridge still sends wall-clock `timestamp_ms` (ADR-013); mutator `started_at` is epoch (D7); `signal.combination` has no expectation; switch to raw `GuardianEvidenceEvent` once published.
+
+### 2026-10-07 - Adopt relative timestamps as the pipeline-wide common time base
+- **Status**: Open
+- **Description**: ADR-013 supersedes ADR-008 and the receive-time base clause of ADR-004: the zero-based source `timestamp_ms` becomes the single common time base for the whole chain, and every component (including DFM/OpenSOVD) carries it unchanged.
+- **Notes**: Requires a projected relative clock at each consumer (offset calibrated from arrivals) so staleness/transport delay stay observable. Follow-up scope: contract timestamp semantics; `components_and_channels.md`, `battery_guardian_model.md`, `case_mutator_model.md` (§7/§9.10/§14–§16/§21); reconcile `missing_packet_timeout_ms` (500 vs. 2000, mutator open point D); migrate Guardian `received_at: Instant`, `guardian_runtime.rs` and `guardian_uprotocol.rs`; stop `vss_bridge` `SystemTime` stamping and define how the relative timestamp crosses KUKSA Data Broker/VSS; re-scope the "Align source timestamps and Evidence Collector subscriptions" work item. Doc-level disambiguation applied: `battery_guardian_model.md`, `case_mutator_model.md`, `components_and_channels.md` now distinguish the source/generation interval Δτ from the receive interval Δt_recv (both on the relative axis).
+
+### 2026-10-07 - ASC plotting script and Nix Python environment
+- **Status**: Resolved
+- **Description**: Added `product/scripts/plot-asc`, a small matplotlib script that decodes the 0x100 BatteryTemperature frame (little-endian payload: CellTempAvg/Max/Min at scale 0.5/offset -40, StateOfCharge at scale 0.5) and plots temperatures plus SoC. Defaults to `demo/can/battery_temp.asc`, accepts an optional path, and handles both the plain 8-byte demo file and the 12-byte `battery_temp_with_ts.asc`.
+- **Notes**: `flake.nix` devshell now provides `pkgs.python3.withPackages [ matplotlib ]` (Python 3.14.7, matplotlib 3.11.1); verified `nix develop --command python3 product/scripts/plot-asc` on both ASC files. No ADR change.

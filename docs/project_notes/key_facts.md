@@ -37,14 +37,14 @@ Never store credentials here — this file is committed to git.
 - DFM catalog: `product/config/battery_guardian/guardian_diagnostics.json`; consumed by the existing Guardian DFM reporter
 - Injection model: `product/config/battery_guardian/fault_injection_model.yaml`; canonical signals are `temp_min`, `temp_avg`, `temp_max`, and `soc`
 - Supported injected classes: `transport.delay`, `transport.drop`, `source.dropout`, `signal.stuck`, `signal.spike`, `signal.drift`, `signal.out_of_range`, and `signal.combination`
-- Decided input contract: BatteryTempEvent on `battery-vss/9001/1/9001` carries `temp_min`, `temp_avg`, `temp_max`, `soc`, and the original CAN generation `timestamp_ms`; timestamps are integer milliseconds starting at 0 and must be preserved unchanged from the timestamped product frame to uProtocol (ADR-008/ADR-011; bridge implementation pending)
-- Target Guardian timing: local monotonic receive time remains authoritative for temperature-rate and staleness checks; source `timestamp_ms` is retained for identity, evidence correlation, and transport-drop detection from unexpected gaps in the expected generation cadence, without replacing the receive-time model base
-- Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once (ADR-004)
+- Decided input contract: BatteryTempEvent on `battery-vss/9001/1/9001` carries `temp_min`, `temp_avg`, `temp_max`, `soc`, and the original CAN generation `timestamp_ms`; the product frame 0x100 carries it explicitly (ADR-011). Timestamps are integer milliseconds starting at 0, are the pipeline-wide common time base, and must be preserved unchanged from the product frame to uProtocol and beyond (ADR-013; bridge implementation pending)
+- Target Guardian timing: the relative `timestamp_ms` is the common time base; the model distinguishes the source/generation interval $\Delta\tau$ (from `ts`, for rate/dynamics) from the receive interval $\Delta t^{\mathrm{recv}}$ projected onto the same base (for freshness/age, drop/jitter, duplicate/reorder). Local receive time is not a separate model base (ADR-013)
+- Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once; all timing on the relative base (ADR-013)
 - Guardian observations are `DetectionClass × DetectionLevel`: class identifies the model rule; level is `WARNING`, `VIOLATION`, or `CRITICAL`
 - Thermal observation: `THERMAL_LIMIT / WARNING` from 60 °C to below 70 °C and `THERMAL_LIMIT / CRITICAL` from 70 °C; the warning threshold is derived from `absolute_max_c - warning_margin_c`
 - Continuous checks: spread, hotspot, and temperature rate emit `WARNING` from 80% through 100% utilization and `VIOLATION` above the model limit; utilization and residual are retained
 - Binary checks: stream stale; absolute temperature and ordering; SoC range/rate; excitation-gated stuck signals emit `VIOLATION` only
-- SoC rate limit: 5 pp/s using actual elapsed receive time; the obsolete fixed `max_step_pp` rule has been removed
+- SoC rate limit: 5 pp/s using the source/generation interval $\Delta\tau$ (ADR-013); the obsolete fixed `max_step_pp` rule has been removed
 - Guardian evidence stream (decided target): every internal `Detection` transition, including unmapped utilization warnings, is published unchanged to the Evidence Collector as `GuardianEvidenceEvent`; it contains class/level, active/cleared state, signal, and available observed/limit/residual/utilization evidence, without requiring a DFM fault ID (ADR-007)
 - DFM reporting: independently projects only configured class/level pairs and may aggregate signal-level detections; thermal warning/critical retain `BatteryOverTempWarning`/`BatteryOverTempCritical`, while continuous-model warnings have no DFM fault
 - Current implementation gap: `guardian_faults.rs` aggregates mapped detections into `Failed`/`Passed` changes and sends those independently to DFM and as mapped `GuardianFaultEvent` messages on `guardian/1001/1/8001`; ADR-007 requires this uProtocol path to be replaced by, or separated from, the raw decision stream
@@ -79,7 +79,7 @@ Never store credentials here — this file is committed to git.
 
 ## Product CAN Assets (`product/config/`)
 
-- Frame 0x100 `BatteryTemperature` is the timestamped 16-byte product frame: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged (ADR-011)
+- Frame 0x100 `BatteryTemperature` is the timestamped 16-byte product frame: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged; `TimeStamp` is the pipeline-wide common time base (ADR-011, ADR-013)
 - `battery_temp_with_ts.asc` starts source time at 0 ms; value mutation and frame deletion preserve all remaining embedded timestamps unchanged
 - Temperature and SoC quantization are 0.5 °C and 0.5 pp; nominal generation period is 100 ms
 
