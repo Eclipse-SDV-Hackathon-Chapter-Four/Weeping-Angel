@@ -24,8 +24,10 @@ use tokio::sync::broadcast;
 
 use crate::{BatteryEvent, FaultEvent, FaultEvidence, Message, Stage};
 
-/// Default bind address (port 8080 is the Guardian).
-pub(crate) const DEFAULT_ADDR: &str = "127.0.0.1:8090";
+/// Default bind address. Binds all interfaces so the observer is reachable
+/// from outside the host; port 8080 is the Guardian. Override with
+/// `--observer-addr` to restrict the listener to a loopback address.
+pub(crate) const DEFAULT_ADDR: &str = "0.0.0.0:8090";
 /// Sliding window kept in the ring buffer, matching the 20 s run convention.
 pub(crate) const WINDOW_MS: u64 = 20_000;
 const MAX_DETECTIONS: usize = 512;

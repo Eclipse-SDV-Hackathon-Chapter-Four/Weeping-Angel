@@ -470,7 +470,13 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ The VSS bridge still stamps wall-clock `now_ms()` per broker update (ADR-013 open point): jitter above 150 ms raises false gaps, and partial updates can produce several events per frame. The bridge must preserve the CAN `TimeStamp` before live runs rely on this check.
 - ❌ A source restart without a stale phase is not recognised (no gaps until the new timeline passes `ts_max`); out-of-order samples still update the previous sample.
 
-### ADR-016: Live scenario observer as a feature-flagged module of the Evidence Collector (2026-10-07)
+### ADR-016: Live scenario observer as a feature-flagged module of the Evidence Collector (2026-10-07) — bind-address default amended
+
+> **Amendment (2026-10-07):** the observer's default bind address is now
+> `0.0.0.0:8090` (all interfaces), not `127.0.0.1:8090`; restrict the listener to
+> a loopback address with `--observer-addr 127.0.0.1:8090`. The module, HTTP+SSE
+> frontend, in-process coupling, read-only scope and not-DoD-critical status of
+> this decision are unchanged.
 **Context:**
 - A browser view of a running campaign experiment is wanted: live battery signals, model ranges, detected fault classes, and the injected incidents on one relative-time axis.
 - The Evidence Collector already subscribes to the battery stream and the Guardian fault-event stream and holds the correlation state; candidate collector→UI paths were REST/SSE, library binding, iceoryx2 IPC, and uProtocol.
@@ -478,7 +484,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
 **Decision:**
 - The observer is a **feature-flagged module plus a CLI option inside the Evidence Collector binary** (Cargo feature `observer`, option `--observer`), not a separate process and not a separate crate. It reads the collector's in-process state directly, so there is no collector→UI transport link.
-- The browser link is **HTTP + Server-Sent Events** on `127.0.0.1:8090`, serving an embedded static frontend; the first SSE event on every connect is a full snapshot, followed by uncoalesced `sample`/`detection` deltas.
+- The browser link is **HTTP + Server-Sent Events** on `0.0.0.0:8090` (default; `--observer-addr` overrides), serving an embedded static frontend; the first SSE event on every connect is a full snapshot, followed by uncoalesced `sample`/`detection` deltas.
 - The observer uses the ADR-013 relative time base (`t0` = first battery timestamp), re-uses the `battery-guardian` library for static bands, and reads dynamic evidence from the Guardian fault-event stream.
 - One experiment per collector process; the last view stays served until the process terminates, and a follow-run process overwrites the state. The observer is not required to survive the run, and the runner terminates the predecessor before the next run.
 - The observer is read-only, is **not DoD-critical**, and is not a source of truth. Full contract: `product/doc/observer/live_observer.md`.

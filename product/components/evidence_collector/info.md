@@ -98,8 +98,8 @@ an embedded static frontend plus a Server-Sent Events stream.
 ```sh
 cargo build --features observer
 cargo run --features observer -- <prefix> --observer \
-    [--observer-addr 127.0.0.1:8090] [--guardian-model FILE]
-# then open http://127.0.0.1:8090
+    [--observer-addr 0.0.0.0:8090] [--guardian-model FILE]
+# then open http://0.0.0.0:8090
 ```
 
 - Routes: `/` (frontend), `/events` (SSE: one `snapshot`, then uncoalesced

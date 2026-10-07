@@ -107,7 +107,7 @@ Never store credentials here — this file is committed to git.
 ## Ports (legacy demo)
 
 - 7447 Zenoh (uProtocol bus) · 7448 Toxiproxy(zenoh) · 7690 OpenSOVD gateway · 8080 Guardian HTTP (`/health`, `/state`) · 8474 Toxiproxy API · 55555 kuksa-databroker
-- 8090 Live Scenario Observer HTTP/SSE (`127.0.0.1`, ADR-016), only when the collector runs with `--observer`
+- 8090 Live Scenario Observer HTTP/SSE (`0.0.0.0`, ADR-016), only when the collector runs with `--observer`
 
 ## Fault Catalog (`demo/diagnostics/catalog/battery_guardian.json`)
 
