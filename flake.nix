@@ -56,6 +56,8 @@
               protoc
               pkgs.git
               pkgs.clang
+              # Python with matplotlib for product/scripts/plot-asc
+              (pkgs.python3.withPackages (ps: [ ps.matplotlib ]))
               # zenoh may call pkg-config at build time for OpenSSL linkage
               pkgs.pkg-config
               pkgs.openssl
