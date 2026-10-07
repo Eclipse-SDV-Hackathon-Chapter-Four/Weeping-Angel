@@ -18,8 +18,7 @@ pub const DEFAULT_BATTERY_TOPIC: &str = "//battery-vss/9001/1/9001";
 
 /// When to stop listening.
 pub struct StopCondition {
-    /// Battery timeline position (ms, relative to the first battery event)
-    /// at which the replay is complete.
+    /// Battery source time (ms) at which the replay is complete.
     pub end_ms: u64,
     /// Stop when nothing arrived for this long (only after the first battery
     /// event); also the grace period for late fault events after `end_ms`.
@@ -87,7 +86,7 @@ pub async fn collect(
     }
 
     let mut messages = Vec::new();
-    let mut origin_ms = None;
+    let mut clock = crate::Clock::default();
     // End of replay seen: stop at this point (grace period for late events).
     let mut end_deadline: Option<tokio::time::Instant> = None;
     // Idle timeout counts only battery/fault messages, not OpenSOVD polls.
@@ -112,8 +111,7 @@ pub async fn collect(
                     match &message {
                         Message::Battery(b) => {
                             last_activity = Some(tokio::time::Instant::now());
-                            let origin = *origin_ms.get_or_insert(b.timestamp_ms);
-                            let t = b.timestamp_ms.saturating_sub(origin);
+                            let t = clock.battery(b.timestamp_ms);
                             if end_deadline.is_none() && t + crate::REPLAY_END_TOLERANCE_MS >= stop.end_ms {
                                 eprintln!("replay end reached at {t} ms, waiting {:?} for late events", stop.idle_timeout);
                                 end_deadline = Some(tokio::time::Instant::now() + stop.idle_timeout);

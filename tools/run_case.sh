@@ -41,7 +41,7 @@ echo "== building (if needed)"
 [ -x product/components/vss_bridge/target/debug/vss_publisher ] || bash "$TOOLS/build_vss_bridge.sh"
 [ -x product/components/fault-lib/target/debug/dfm_bin ] || bash "$TOOLS/build_dfm.sh"
 [ -x product/components/dfm_sovd_bridge/target/debug/dfm_sovd_bridge ] || bash "$TOOLS/build_dfm_sovd_bridge.sh"
-[ -x "$COLLECTOR" ] || (cd product/components/evidence_collector && cargo build)
+(cd product/components/evidence_collector && cargo build -q)   # always: cheap when up to date
 
 cleanup() {
   echo "== stopping Guardian, VSS bridge, OpenSOVD bridge and DFM"
