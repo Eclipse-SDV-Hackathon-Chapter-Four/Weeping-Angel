@@ -6,6 +6,8 @@ HTTP_PORT ?= 8080
 ZENOH_CONNECT ?= tcp/host.docker.internal:7447
 
 PROJECT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+PRODUCT_DIR := $(abspath $(PROJECT_DIR)/../..)
+CONFIG_DIR := $(PRODUCT_DIR)/config
 LOCAL_UID := $(shell id -u)
 LOCAL_GID := $(shell id -g)
 
@@ -15,6 +17,7 @@ TARGET_VOLUME := battery-guardian-target
 
 MOUNTS := \
 	--mount type=bind,source="$(PROJECT_DIR)",target=/workspace \
+	--mount type=bind,source="$(CONFIG_DIR)",target=/config,readonly \
 	--mount type=volume,source=$(CARGO_REGISTRY_VOLUME),target=/usr/local/cargo/registry \
 	--mount type=volume,source=$(CARGO_GIT_VOLUME),target=/usr/local/cargo/git \
 	--mount type=volume,source=$(TARGET_VOLUME),target=/workspace/target
@@ -29,6 +32,7 @@ RUN_AS_USER := $(DOCKER) run --rm --init \
 	--user $(LOCAL_UID):$(LOCAL_GID) \
 	-e CARGO_TARGET_DIR=/tmp/guardian-target \
 	--mount type=bind,source="$(PROJECT_DIR)",target=/workspace \
+	--mount type=bind,source="$(CONFIG_DIR)",target=/config,readonly \
 	-w /workspace \
 	$(IMAGE)
 

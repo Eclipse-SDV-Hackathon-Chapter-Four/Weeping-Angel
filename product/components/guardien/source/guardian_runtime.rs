@@ -140,7 +140,7 @@ mod tests {
     use super::*;
 
     fn config() -> GuardianConfig {
-        GuardianConfig::from_yaml_str(include_str!("../config/battery_guardian.yaml"))
+        GuardianConfig::from_yaml_str(include_str!("../../../config/battery_guardian.yaml"))
             .expect("test configuration")
     }
 

@@ -191,7 +191,7 @@ fn configuration_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("config")
+                .join("../../config")
                 .join("battery_guardian.yaml")
         })
 }
