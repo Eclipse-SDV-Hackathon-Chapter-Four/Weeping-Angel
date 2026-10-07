@@ -13,6 +13,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use battery_guardian::guardian_reporting::{self, FaultReporterHandle};
 use battery_guardian::{BatterySample, Detection, GuardianConfig, GuardianRuntime};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -74,7 +75,8 @@ fn decode_battery_event(message: &UMessage) -> Result<BatteryTempEvent> {
     serde_json::from_slice(payload).context("decode BatteryTempEvent JSON")
 }
 
-fn report_detection(detection: &Detection) {
+fn report_detection(detection: &Detection, faults: &FaultReporterHandle) {
+    faults.report(detection);
     let signal = detection
         .signal
         .map(|signal| signal.as_str())
@@ -96,7 +98,11 @@ fn report_detection(detection: &Detection) {
     }
 }
 
-fn start_periodic_guardian(state: AppState, config: GuardianConfig) -> tokio::task::JoinHandle<()> {
+fn start_periodic_guardian(
+    state: AppState,
+    config: GuardianConfig,
+    faults: FaultReporterHandle,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(config.evaluation_period());
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -104,7 +110,7 @@ fn start_periodic_guardian(state: AppState, config: GuardianConfig) -> tokio::ta
             interval.tick().await;
             let detections = state.runtime.lock().await.cycle(Instant::now(), &config);
             for detection in detections {
-                report_detection(&detection);
+                report_detection(&detection, &faults);
             }
         }
     })
@@ -186,6 +192,15 @@ async fn open_up_transport(uri_provider: Arc<dyn LocalUriProvider>) -> Result<Ar
     Ok(Arc::new(transport))
 }
 
+fn fault_catalog_path() -> PathBuf {
+    std::env::var_os("GUARDIAN_FAULT_CATALOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../config/catalog/battery_guardian.json")
+        })
+}
+
 fn configuration_path() -> PathBuf {
     std::env::var_os("GUARDIAN_CONFIG")
         .map(PathBuf::from)
@@ -231,7 +246,10 @@ async fn main() -> Result<()> {
         .map_err(|error| anyhow::anyhow!("register BatteryTempEvent listener: {error}"))?;
     info!(uri = %battery_temp_uri().to_uri(false), "subscribed to battery temperature events");
 
-    let _periodic_guardian = start_periodic_guardian(state.clone(), config);
+    let sovd_path =
+        std::env::var("GUARDIAN_SOVD_PATH").unwrap_or_else(|_| "battery_guardian".to_string());
+    let faults = guardian_reporting::spawn(fault_catalog_path(), sovd_path);
+    let _periodic_guardian = start_periodic_guardian(state.clone(), config, faults);
 
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());

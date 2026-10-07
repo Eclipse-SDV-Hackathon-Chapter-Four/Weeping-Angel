@@ -6,8 +6,10 @@ HTTP_PORT ?= 8080
 ZENOH_CONNECT ?= tcp/host.docker.internal:7447
 
 PROJECT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+# Mount the product directory so the ../fault-lib path dependency and the
+# shared catalog in ../../config/catalog resolve.
 PRODUCT_DIR := $(abspath $(PROJECT_DIR)/../..)
-CONFIG_DIR := $(PRODUCT_DIR)/config
+WORKDIR := /workspace/components/$(notdir $(PROJECT_DIR))
 LOCAL_UID := $(shell id -u)
 LOCAL_GID := $(shell id -g)
 
@@ -16,24 +18,22 @@ CARGO_GIT_VOLUME := battery-guardian-cargo-git
 TARGET_VOLUME := battery-guardian-target
 
 MOUNTS := \
-	--mount type=bind,source="$(PROJECT_DIR)",target=/workspace \
-	--mount type=bind,source="$(CONFIG_DIR)",target=/config,readonly \
+	--mount type=bind,source="$(PRODUCT_DIR)",target=/workspace \
 	--mount type=volume,source=$(CARGO_REGISTRY_VOLUME),target=/usr/local/cargo/registry \
 	--mount type=volume,source=$(CARGO_GIT_VOLUME),target=/usr/local/cargo/git \
-	--mount type=volume,source=$(TARGET_VOLUME),target=/workspace/target
+	--mount type=volume,source=$(TARGET_VOLUME),target=$(WORKDIR)/target
 
 RUN := $(DOCKER) run --rm --init \
 	$(MOUNTS) \
-	-w /workspace \
+	-w $(WORKDIR) \
 	$(IMAGE)
 
 # Formatting runs as the host user because it modifies source files.
 RUN_AS_USER := $(DOCKER) run --rm --init \
 	--user $(LOCAL_UID):$(LOCAL_GID) \
 	-e CARGO_TARGET_DIR=/tmp/guardian-target \
-	--mount type=bind,source="$(PROJECT_DIR)",target=/workspace \
-	--mount type=bind,source="$(CONFIG_DIR)",target=/config,readonly \
-	-w /workspace \
+	--mount type=bind,source="$(PRODUCT_DIR)",target=/workspace \
+	-w $(WORKDIR) \
 	$(IMAGE)
 
 .PHONY: help image cache test test-model test-runtime build check \
@@ -84,14 +84,14 @@ run: image cache ## Start Guardian and expose its HTTP service
 		-p $(HTTP_PORT):8080 \
 		-e ZENOH_CONNECT=$(ZENOH_CONNECT) \
 		$(MOUNTS) \
-		-w /workspace \
+		-w $(WORKDIR) \
 		$(IMAGE) \
 		cargo run --locked --bin guardian
 
 shell: image cache ## Open a shell in the development container
 	$(DOCKER) run --rm --init -it \
 		$(MOUNTS) \
-		-w /workspace \
+		-w $(WORKDIR) \
 		$(IMAGE) \
 		sh
 

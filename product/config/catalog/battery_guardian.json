@@ -1,15 +1,15 @@
 {
     "id": "battery_guardian",
-    "version": 1,
+    "version": 2,
     "faults": [
         {
             "id": {
-                "Text": "BatteryOverTempWarning"
+                "Text": "BatteryTempStreamStale"
             },
-            "name": "BatteryOverTemperatureWarning",
-            "summary": "Max cell temperature crossed the WARNING threshold (>=45 C).",
-            "category": "Hardware",
-            "severity": "Warn",
+            "name": "BatteryTempStreamStale",
+            "summary": "No battery temperature sample received within the missing-packet timeout.",
+            "category": "Communication",
+            "severity": "Error",
             "compliance": [
                 "SafetyCritical"
             ],
@@ -20,10 +20,10 @@
         },
         {
             "id": {
-                "Text": "BatteryOverTempCritical"
+                "Text": "BatteryTempAbsoluteLimit"
             },
-            "name": "BatteryOverTemperatureCritical",
-            "summary": "Max cell temperature crossed the CRITICAL threshold (>=55 C).",
+            "name": "BatteryTempAbsoluteLimit",
+            "summary": "Battery temperature outside the absolute physical limits.",
             "category": "Hardware",
             "severity": "Fatal",
             "compliance": [
@@ -36,43 +36,107 @@
         },
         {
             "id": {
-                "Text": "BatteryTempSignalStale"
+                "Text": "BatteryTempOrdering"
             },
-            "name": "BatteryTempSignalStale",
-            "summary": "No fresh battery temperature sample received within the freshness deadline (delayed/dropped signal).",
-            "category": "Communication",
-            "severity": "Error",
-            "compliance": [
-                "SafetyCritical"
-            ],
-            "reporter_side_debounce": null,
-            "reporter_side_reset": null,
-            "manager_side_debounce": null,
-            "manager_side_reset": null
-        },
-        {
-            "id": {
-                "Text": "BatteryTempSignalStuck"
-            },
-            "name": "BatteryTempSignalStuck",
-            "summary": "Battery temperature value has not changed across consecutive samples (stuck signal).",
-            "category": "Communication",
-            "severity": "Error",
-            "compliance": [
-                "SafetyCritical"
-            ],
-            "reporter_side_debounce": null,
-            "reporter_side_reset": null,
-            "manager_side_debounce": null,
-            "manager_side_reset": null
-        },
-        {
-            "id": {
-                "Text": "BatteryTempImplausible"
-            },
-            "name": "BatteryTempImplausible",
-            "summary": "Battery temperature is out of plausible range or changed implausibly fast (spike/out-of-range).",
+            "name": "BatteryTempOrdering",
+            "summary": "Temperature ordering violated (min <= avg <= max).",
             "category": "Configuration",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempSpread"
+            },
+            "name": "BatteryTempSpread",
+            "summary": "Spread between max and min temperature exceeds the physical limit.",
+            "category": "Hardware",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempHotspot"
+            },
+            "name": "BatteryTempHotspot",
+            "summary": "Max temperature deviates from average beyond the hotspot limit.",
+            "category": "Hardware",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryTempRate"
+            },
+            "name": "BatteryTempRate",
+            "summary": "Temperature changed faster than physically possible.",
+            "category": "Configuration",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatterySocRange"
+            },
+            "name": "BatterySocRange",
+            "summary": "State of charge outside its valid range.",
+            "category": "Configuration",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatterySocRate"
+            },
+            "name": "BatterySocRate",
+            "summary": "State of charge changed faster than physically possible.",
+            "category": "Configuration",
+            "severity": "Error",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatterySignalStuck"
+            },
+            "name": "BatterySignalStuck",
+            "summary": "A battery signal stayed flat while other signals changed (stuck signal).",
+            "category": "Communication",
             "severity": "Error",
             "compliance": [
                 "SafetyCritical"

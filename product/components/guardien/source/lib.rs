@@ -1,5 +1,6 @@
 pub mod guardian_config;
 pub mod guardian_model;
+pub mod guardian_reporting;
 pub mod guardian_runtime;
 
 pub use guardian_config::GuardianConfig;

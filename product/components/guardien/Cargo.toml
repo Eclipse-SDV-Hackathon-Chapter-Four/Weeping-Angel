@@ -20,6 +20,8 @@ serde_yaml = "0.9"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+common = { path = "../fault-lib/src/common" }
+fault_lib = { path = "../fault-lib/src/fault_lib" }
 up-rust = "0.9"
 up-transport-zenoh = "0.9"
 zenoh = { version = "1", features = ["unstable"] }
