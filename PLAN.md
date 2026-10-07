@@ -21,7 +21,7 @@ flowchart
   UBUS[uProtocol channels] --> EV[Evidence collector]
   SOVD --> EV
   
-  SUPER -->|increment| REP((Evidenve Report))
+  SUPER -->|increment| REP((Evidence Report))
 ```
 <!-- OD[openDuT remote orchestration] FI -->
 
