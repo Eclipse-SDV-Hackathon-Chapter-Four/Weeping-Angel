@@ -253,21 +253,22 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Focused v1; later phases have a documented place in the interface spec.
 - ❌ DoD 7/8 not met in v1 (documented only).
 
-### ADR-011: Product CAN frame carries the source timestamp explicitly (amends ADR-008) (2026-10-07)
+### ADR-011: Product CAN FD frame carries the source timestamp explicitly (amends ADR-008) (2026-10-07)
 
 **Context:**
 - ADR-008 defined a zero-based source-generation timestamp but retained the former 8-byte demo payload and therefore described the timestamp as out-of-band metadata.
-- The canonical product assets now use a timestamped BatteryTemperature frame: four timestamp bytes followed by the four existing 16-bit battery signals.
+- The canonical product assets now use a timestamped CAN FD BatteryTemperature frame: four timestamp bytes followed by the four existing 16-bit battery signals and four reserved bytes.
 - The Case Mutator must preserve source identity while independently changing replay/arrival timing for transport-delay cases.
 
 **Decision:**
-- The product `BatteryTemperature` frame `0x100` is 16 bytes: unsigned 32-bit `TimeStamp` in milliseconds at the front, followed by `CellTempAvg`, `CellTempMax`, `CellTempMin`, `StateOfCharge`, and four reserved bytes.
+- The product `BatteryTemperature` frame `0x100` is CAN FD with standard 11-bit ID, DLC code `0xA`, and a 16-byte payload: unsigned 32-bit `TimeStamp` in milliseconds at the front, followed by `CellTempAvg`, `CellTempMax`, `CellTempMin`, `StateOfCharge`, and four reserved bytes.
+- Product ASC assets use the canonical `CANFD <channel> Rx 100 0 0 a 16 <payload> <trailer>` record implemented by the Case Mutator and replayed through the KUKSA dump-file path. `product/doc/can/battery_can_fd_replay.md` records that implemented contract.
 - `TimeStamp` starts at `0`, uses little-endian byte order consistently with the other frame signals, and remains unchanged by value mutation, frame deletion, or transport-delay scheduling. The reserved bytes remain uninterpreted and unchanged.
 - The unchanged value is propagated into `BatteryTempEvent.timestamp_ms`. Local monotonic receive time remains the Guardian time base for temperature rate and stale evaluation; ADR-008's permitted timestamp-gap drop detection remains unchanged.
 - This amends only ADR-008's out-of-band-metadata clause. The decision not to add sequence numbers remains in force, and the 8-byte `demo/` frame remains a non-authoritative historical reference.
 
 **Alternatives Considered:**
-- Keep the product frame at 8 bytes and carry timestamp only outside CAN → Rejected: it does not match the canonical timestamped ASC asset and prevents the ASC mutator from preserving generation time independently of replay timing.
+- Keep Classic CAN or carry the timestamp only outside CAN → Rejected: Classic CAN cannot carry the 16-byte product payload, and out-of-band time prevents the ASC Mutator from preserving generation time independently of replay timing.
 - Replace timestamp with a sequence number → Rejected: elapsed source time is required for evidence correlation and the no-sequence decision remains valid.
 
 **Consequences:**

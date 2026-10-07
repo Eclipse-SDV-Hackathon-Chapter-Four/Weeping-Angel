@@ -45,12 +45,12 @@ is not authoritative) — they do not become open issues here.
 ### 2026-10-07 - Reconcile Case Mutator specification with Guardian model
 - **Status**: Resolved
 - **Description**: Implemented the Rust Case Mutator under `product/components/case_mutator` with bounded inverse search, quantization, real Guardian forward verification, ASC rendering, ground truth, oracle output, and structured unsatisfiable results.
-- **Notes**: All eight canonical v1 injections are covered by end-to-end generation tests. The Guardian and canonical configuration now use the specified 5 pp/s source/generation-interval SoC rate (ADR-013). Product frame 0x100 is aligned as a timestamped 16-byte frame with a little-endian timestamp under ADR-011. Component and Guardian `make check` both pass in the dev container.
+- **Notes**: All eight canonical v1 injections are covered by end-to-end generation tests. The Guardian and canonical configuration now use the specified 5 pp/s source/generation-interval SoC rate (ADR-013). Product frame 0x100 is CAN FD with DLC code `0xA`, 16-byte payload, and a little-endian timestamp under ADR-011. Component and Guardian `make check` both passed at resolution time.
 
 ### 2026-10-07 - Specify battery campaign test harness
 - **Status**: In Progress
 - **Description**: Define five 20-second reference scenarios, multi-incident elementary-fault campaigns, pre-generated experiment artifacts, and the later Evidence Collector based execution flow.
-- **Notes**: ADR-012 and `product/doc/testing/battery_campaign_test_harness.md` capture the agreed framework and clearly separate decided behavior from open timing, trajectory, reset, and runner details. Campaign artifacts require no hashes. The current Case Mutator still emits a model SHA-256 and supports one injection per request; both must be reconciled when multi-incident generation is implemented.
+- **Notes**: ADR-014 and `product/doc/testing/battery_campaign_test_harness.md` capture the agreed framework and clearly separate decided behavior from open timing, trajectory, reset, and runner details. Campaign artifacts require no hashes. The current Case Mutator still emits a model SHA-256 and supports one injection per request; both must be reconciled when multi-incident generation is implemented.
 
 ### 2026-10-06 - Component & channel specification (product/doc/architecture)
 - **Status**: In Progress
@@ -69,10 +69,10 @@ is not authoritative) — they do not become open issues here.
 
 ### 2026-10-07 - ASC plotting script and Nix Python environment
 - **Status**: Resolved
-- **Description**: Added `product/scripts/plot-asc`, a small matplotlib script that decodes the 0x100 BatteryTemperature frame (little-endian payload: CellTempAvg/Max/Min at scale 0.5/offset -40, StateOfCharge at scale 0.5) and plots temperatures plus SoC. Defaults to `demo/can/battery_temp.asc`, accepts an optional path, and handles both the plain 8-byte demo file and the 12-byte `battery_temp_with_ts.asc`.
+- **Description**: Added `product/scripts/plot-asc`, a small matplotlib script that decodes the 0x100 BatteryTemperature frame (little-endian payload: CellTempAvg/Max/Min at scale 0.5/offset -40, StateOfCharge at scale 0.5) and plots temperatures plus SoC. It handles both the plain 8-byte demo frame and the 16-byte CAN FD product frame.
 - **Notes**: `flake.nix` devshell now provides `pkgs.python3.withPackages [ matplotlib ]` (Python 3.14.7, matplotlib 3.11.1); verified `nix develop --command python3 product/scripts/plot-asc` on both ASC files. No ADR change.
 
 ### 2026-10-07 - Battery CAN frames as CAN FD
 - **Status**: Resolved
-- **Description**: `product/config/battery_temp_with_ts.asc` converted to CAN FD lines (16 bytes); classic CAN lines were cut to 8 bytes by python-can, losing `CellTempMin` and `StateOfCharge`. Case mutator parses/renders both line formats.
-- **Notes**: Replay via `product/components/start_can.sh` delivers all four signals; mutator and collector tests pass. Collector now reads the mutator's `<stem>.ground_truth.yaml` and its `source_started_at_ms`/`source_finished_at_ms` window.
+- **Description**: `product/config/battery_temp_with_ts.asc` converted to canonical CAN FD lines with DLC code `0xA` and 16-byte payload; Classic CAN replay was cut to 8 bytes by python-can, losing `CellTempMin` and `StateOfCharge`. The Case Mutator parses/renders both line formats while product replays use CAN FD.
+- **Notes**: Replay via `product/components/start_can.sh` delivers all four signals; mutator and collector tests pass. The implemented format is now normative in `product/doc/can/battery_can_fd_replay.md`. Collector reads the mutator's `<stem>.ground_truth.yaml` and its `source_started_at_ms`/`source_finished_at_ms` window.

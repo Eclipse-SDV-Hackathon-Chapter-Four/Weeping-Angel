@@ -58,16 +58,16 @@ Never store credentials here — this file is committed to git.
 ## Product Case Mutator
 
 - Component: `product/components/case_mutator/`; Rust binary `case-mutator`
-- Reads an explicit generation request, the canonical fault-injection instance and the configured `guardian_model.yaml`; ADR-012 removes model, configuration, trace, and artifact hashes from the target campaign artifacts, while the current implementation still emits a model SHA-256 pending reconciliation
+- Reads an explicit generation request, the canonical fault-injection instance and the configured `guardian_model.yaml`; ADR-014 removes model, configuration, trace, and artifact hashes from the target campaign artifacts, while the current implementation still emits a model SHA-256 pending reconciliation
 - Uses the real `battery-guardian` Rust model/runtime as its forward oracle rather than maintaining a second detection implementation
 - Supports all canonical v1 classes: stuck, spike, drift, out-of-range, signal combination, transport delay/drop, and source dropout
 - Emits mutated ASC, independent injection ground truth, and a Guardian test-oracle sidecar; impossible goals produce structured `UNSATISFIABLE`
 - Preserves non-target ASC lines byte-exactly and never rebases embedded source timestamps on drop; transport delay changes replay time while preserving generation time
-- Dev-container `make check` passes formatting, Clippy with warnings denied, 5 unit tests and 5 end-to-end generation tests
+- Current Rust tests pass 6 unit tests and 5 end-to-end generation tests; the current checkout still needs `cargo fmt` before the complete `make check` is green
 
 ## Battery Campaign Test Harness
 
-- Normative discussion specification: `product/doc/testing/battery_campaign_test_harness.md`
+- Normative discussion specification: `product/doc/testing/battery_campaign_test_harness.md`; CAN FD replay contract: `product/doc/can/battery_can_fd_replay.md`
 - Five version-controlled 20-second reference scenarios at the nominal 100-ms cycle: three nominal operating states (`cold_nominal`, `warm_nominal`, `hot_nominal`) and two genuine fault states (`overtemp_fault`, `hotspot_fault`)
 - Initial elementary-fault campaigns mutate only the three nominal scenarios; the two fault scenarios are unmodified positive regression runs until combined-fault testing is explicitly specified
 - One campaign represents one canonical injected fault class; each generated experiment ASC contains five separated incidents of that class with explicit recovery intervals and per-incident expectations
@@ -89,7 +89,7 @@ Never store credentials here — this file is committed to git.
 
 ## Product CAN Assets (`product/config/`)
 
-- Frame 0x100 `BatteryTemperature` is the timestamped 16-byte product frame: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged; `TimeStamp` is the pipeline-wide common time base (ADR-011, ADR-013); stored in the ASC as CAN FD lines (`CANFD … 0 0 a 16 <bytes>`), since classic CAN lines are truncated to 8 bytes on replay
+- Frame 0x100 `BatteryTemperature` is CAN FD with standard 11-bit ID, DLC code `0xA`, and a 16-byte payload: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged; `TimeStamp` is the pipeline-wide common time base (ADR-011, ADR-013); the normative ASC form is `CANFD … 0 0 a 16 <bytes>`
 - `battery_temp_with_ts.asc` starts source time at 0 ms; value mutation and frame deletion preserve all remaining embedded timestamps unchanged
 - Temperature and SoC quantization are 0.5 °C and 0.5 pp; nominal generation period is 100 ms
 

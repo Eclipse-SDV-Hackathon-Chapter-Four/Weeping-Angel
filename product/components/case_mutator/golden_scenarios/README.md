@@ -5,23 +5,23 @@ Frame ID `0x100`, DLC code `0xA`, data length 16, BRS=0, ESI=0.
 
 ## Model-validation result
 
-### `cold_nominal`
+### `0_cold_nominal.asc`
 - start: min=-13.0, avg=-11.0, max=-9.5 °C, SoC=88.0%
 - end: min=-2.0, avg=0.0, max=2.5 °C, SoC=83.5%
 - detections: **none**
 
-### `warm_nominal`
+### `1_warm_nominal.asc`
 - start: min=27.5, avg=30.0, max=31.5 °C, SoC=45.0%
 - end: min=35.5, avg=38.0, max=39.5 °C, SoC=52.0%
 - detections: **none**
 
-### `hot_nominal`
+### `2_hot_nominal.asc`
 - start: min=56.5, avg=58.5, max=60.0 °C, SoC=78.0%
 - end: min=56.5, avg=58.5, max=60.0 °C, SoC=68.5%
 - detections:
   - `THERMAL_LIMIT/WARNING/temp_max`: 200 frames, first 0.0s, last 19.9s
 
-### `overtemp_fault`
+### `3_overtemp_fault.asc`
 - start: min=54.0, avg=56.0, max=57.5 °C, SoC=84.0%
 - end: min=70.5, avg=72.5, max=74.0 °C, SoC=74.5%
 - detections:
@@ -32,7 +32,7 @@ Frame ID `0x100`, DLC code `0xA`, data length 16, BRS=0, ESI=0.
   - `THERMAL_LIMIT/CRITICAL/temp_max`: 50 frames, first 15.0s, last 19.9s
   - `PHYSICAL_TEMP_ABSOLUTE_LIMIT/VIOLATION/temp_max`: 44 frames, first 15.6s, last 19.9s
 
-### `hotspot_fault`
+### `4_hotspot_fault.asc`
 - start: min=42.5, avg=45.0, max=46.5 °C, SoC=72.0%
 - end: min=44.5, avg=47.0, max=54.0 °C, SoC=67.5%
 - detections:

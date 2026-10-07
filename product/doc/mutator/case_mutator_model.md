@@ -30,6 +30,9 @@ product/config/battery_guardian/guardian_diagnostics.json
 
 product/interfaces/battery_fault_contract.yaml
     event schemas only
+
+product/doc/can/battery_can_fd_replay.md
+    product CAN FD payload and Vector ASC representation
 ```
 
 The mutator must keep three concepts strictly separate:
@@ -69,18 +72,11 @@ ASC replay -> KUKSA CAN provider -> Databroker -> VSS bridge
                            \-> DFM -> OpenSOVD ------------> Evidence Collector
 ```
 
-The mutator operates on timestamped CAN frame `0x100`, DLC 16, containing a
-little-endian 32-bit source-generation timestamp followed by:
-
-```text
-temp_min
-temp_avg
-temp_max
-soc
-```
-
-The remaining four payload bytes are reserved. The mutator preserves them
-unchanged and does not interpret them.
+The mutator operates on the timestamped CAN FD product frame `0x100`: CAN FD
+DLC code `0xA`, 16-byte payload, and the exact payload/ASC representation
+defined in `product/doc/can/battery_can_fd_replay.md`. The payload contains the
+little-endian timestamp, `temp_avg`, `temp_max`, `temp_min`, `soc`, and four
+reserved bytes in that order. The Mutator preserves reserved bytes unchanged.
 
 All non-target ASC content must remain byte-identical unless a temporal mutation
 explicitly changes the timeline.
@@ -1015,7 +1011,8 @@ stuck window / excitation cases
 For each case:
 
 1. parse the reference ASC;
-2. collect timestamped battery frames `0x100`, DLC 16;
+2. collect timestamped CAN FD battery frames `0x100` with DLC code `0xA` and
+   16-byte payloads;
 3. preserve the configured lead-in byte-identically;
 4. load the exact Guardian model;
 5. load the injection instance;
