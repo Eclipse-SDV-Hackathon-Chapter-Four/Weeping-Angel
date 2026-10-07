@@ -16,6 +16,10 @@ pub const DEFAULT_FAULT_TOPIC: &str = "//guardian/1001/1/8001";
 /// `BatteryTempEvent` topic of the VSS bridge (ADR-007).
 pub const DEFAULT_BATTERY_TOPIC: &str = "//battery-vss/9001/1/9001";
 
+/// Optional live sink, invoked for every message in arrival order before it is
+/// buffered. Used by the live observer (ADR-016).
+pub(crate) type Sink = Option<Arc<dyn Fn(&Message) + Send + Sync>>;
+
 /// When to stop listening.
 pub struct StopCondition {
     /// Battery source time (ms) at which the replay is complete.
@@ -68,10 +72,12 @@ async fn open_transport() -> Result<Arc<dyn UTransport>> {
 
 /// Subscribes to both topics (and polls OpenSOVD at `sovd_url`, if given) and
 /// collects messages in arrival order until `stop` is met or Ctrl-C is pressed.
+/// `sink`, when set, sees every message live before it is appended.
 pub async fn collect(
     topics: &[UUri],
     sovd_url: Option<&str>,
     stop: &StopCondition,
+    sink: Sink,
 ) -> Result<Vec<Message>> {
     let transport = open_transport().await?;
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -129,6 +135,9 @@ pub async fn collect(
                             }
                         }
                         Message::Sovd(..) => {}
+                    }
+                    if let Some(sink) = &sink {
+                        sink(&message);
                     }
                     messages.push(message);
                 }

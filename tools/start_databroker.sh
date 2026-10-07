@@ -10,7 +10,7 @@ ADDRESS="127.0.0.1"
 PORT=55555
 VSS="${KUKSA_VSS_FILE:-/usr/local/share/kuksa/vss_release_6.0.json}"
 OVERLAY="$(cd "$(dirname "$0")/.." && pwd)/product/config/vss_overlay.json"
-LOG="/tmp/databroker.log"
+LOG="${DATABROKER_LOG:-/tmp/databroker.log}"
 
 if ! command -v databroker >/dev/null; then
   echo "databroker: not installed (rebuild the dev container), not starting"

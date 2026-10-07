@@ -197,7 +197,9 @@ library — never re-derived by hand or in the frontend (ADR-005):
    collector for exactly one experiment (ADR-014 §7.1), passing the bundle
    prefix and `--idle-timeout` (drain). The observer reads
    `<prefix>.ground_truth.yaml` and, once bound, the same-prefix
-   `<prefix>.oracle.yaml` (runner-supplied).
+   `<prefix>.oracle.yaml` (runner-supplied). Set `E2E_OBSERVER=1` in the runner
+   to add `--observer` and build the collector with `--features observer`;
+   `E2E_OBSERVER_ADDR` overrides the bind address.
 2. The observer serves the live view during the replay.
 3. After replay end and drain, the last view is **frozen** and kept served until
    the process terminates; the collector's drain/finalize/verdict phase is that

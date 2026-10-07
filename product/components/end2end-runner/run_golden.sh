@@ -18,6 +18,7 @@
 #   run_golden.sh <case> [...]    # run only the named cases
 #   E2E_REBUILD=1 run_golden.sh   # force binary rebuild
 #   E2E_REGEN_CASES=1 run_golden.sh  # force case regeneration
+#   E2E_OBSERVER=1 run_golden.sh     # serve the live observer during each case
 set -euo pipefail
 
 COMPONENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +35,8 @@ E2E_IDLE_TIMEOUT_S="${E2E_IDLE_TIMEOUT_S:-3}"     # collector drain window
 E2E_CASE_TIMEOUT_S="${E2E_CASE_TIMEOUT_S:-240}"   # per-case collector deadline
 E2E_REBUILD="${E2E_REBUILD:-0}"                   # 1 = force binary rebuild
 E2E_REGEN_CASES="${E2E_REGEN_CASES:-0}"           # 1 = regenerate case artifacts
+E2E_OBSERVER="${E2E_OBSERVER:-0}"                 # 1 = serve the live observer (ADR-016)
+E2E_OBSERVER_ADDR="${E2E_OBSERVER_ADDR:-127.0.0.1:8090}"
 
 TARGET="$PRODUCT_DIR/components"
 BIN_GUARDIAN="$TARGET/guardien/target/debug/guardian"
@@ -130,9 +133,11 @@ build() {
     log "building vss_publisher"
     (cd "$TARGET/vss_bridge" && $cargo build --locked) >&2
   fi
-  if [ ! -x "$BIN_COLLECTOR" ] || [ "$E2E_REBUILD" = 1 ]; then
-    log "building evidence_collector"
-    (cd "$TARGET/evidence_collector" && $cargo build --locked) >&2
+  local collector_features=()
+  [ "$E2E_OBSERVER" = 1 ] && collector_features=(--features observer)
+  if [ ! -x "$BIN_COLLECTOR" ] || [ "$E2E_REBUILD" = 1 ] || [ "$E2E_OBSERVER" = 1 ]; then
+    log "building evidence_collector ${collector_features[*]:-}"
+    (cd "$TARGET/evidence_collector" && $cargo build --locked "${collector_features[@]}") >&2
   fi
   if [ ! -x "$BIN_MUTATOR" ] || [ "$E2E_REBUILD" = 1 ]; then
     log "building case-mutator"
@@ -204,11 +209,12 @@ INFRA_PIDS=()
 
 start_infra() {
   ensure_python_env
+  # Infrastructure logs land in the run dir so the dump is self-contained.
   log "starting zenoh router"
-  "$TOOLS_DIR/start_zenohd.sh" >&2
+  ZENOH_LOG="$RUN_DIR/logs/zenohd.log" "$TOOLS_DIR/start_zenohd.sh" >&2
   wait_port 7447 "zenohd" 15
   log "starting kuksa-databroker"
-  "$TOOLS_DIR/start_databroker.sh" >&2
+  DATABROKER_LOG="$RUN_DIR/logs/databroker.log" "$TOOLS_DIR/start_databroker.sh" >&2
   wait_port 55555 "kuksa-databroker" 15
 
   log "starting vss_publisher (databroker -> uProtocol)"
@@ -290,13 +296,27 @@ run_case() { # <name> <prefix_abs> <case_dir>
   ensure_vss_bridge_alive
   start_case_stack "$case_dir"
 
+  local -a observer_args=()
+  if [ "$E2E_OBSERVER" = 1 ]; then
+    observer_args=(--observer --observer-addr "$E2E_OBSERVER_ADDR")
+  fi
   log "case $name: starting evidence collector"
   ZENOH_CONNECT="$ZENOH_CONNECT" \
     "$BIN_COLLECTOR" "$prefix" \
       --idle-timeout "$E2E_IDLE_TIMEOUT_S" \
       --report "$case_dir/report.md" \
+      "${observer_args[@]}" \
       >"$case_dir/collector.out" 2>"$case_dir/collector.log" &
   local col_pid=$!
+
+  if [ "$E2E_OBSERVER" = 1 ]; then
+    local w
+    for ((w = 0; w < 40; w++)); do
+      curl -fsS "http://$E2E_OBSERVER_ADDR/health" >/dev/null 2>&1 && break
+      sleep 0.25
+    done
+    log "case $name: live observer on http://$E2E_OBSERVER_ADDR (until this case's collector exits)"
+  fi
 
   # The collector prints "replay lasts ... ms" once it is subscribed.
   local i subscribed=0

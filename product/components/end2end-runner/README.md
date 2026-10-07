@@ -60,7 +60,10 @@ Exit code: `0` only if every case verdict is `PASS`; `1` otherwise
 | `E2E_CASE_TIMEOUT_S` | `240` | Hard deadline per case for the collector |
 | `E2E_REBUILD` | `0` | `1` = rebuild all binaries before the run |
 | `E2E_REGEN_CASES` | `0` | `1` = regenerate mutator-generated case artifacts |
+| `E2E_OBSERVER` | `0` | `1` = run each case's collector with the live observer (ADR-016); also builds `--features observer` |
+| `E2E_OBSERVER_ADDR` | `127.0.0.1:8090` | Observer bind address when `E2E_OBSERVER=1` |
 | `E2E_VENV` | `$HOME/.venv` | Python venv used for the CAN replay; created + populated by the runner when missing (mirrors the devcontainer `post-create` convention) |
+| `ZENOH_LOG` / `DATABROKER_LOG` | run dir / default | Log destinations of `zenohd` / `databroker`; the runner redirects both into `logs/` of the run dir (default `/tmp/…log` when the start scripts run standalone) |
 
 ## Component arguments (as used by the runner)
 
@@ -188,10 +191,24 @@ evidence_collector <prefix> \
 | `--fault-topic URI` | Optional; default `//guardian/1001/1/8001` |
 | `--battery-topic URI` | Optional; default `//battery-vss/9001/1/9001` |
 | `--expectations FILE` | Optional; default `expected_observations.yaml` in the component |
+| `--observer` | Optional (feature `observer`); serve the read-only live observer (ADR-016) |
+| `--observer-addr ADDR` | Optional; observer bind address, default `127.0.0.1:8090` |
+| `--guardian-model FILE` | Optional; model YAML for the static bands, default `product/config/battery_guardian/guardian_model.yaml` |
 | `ZENOH_CONNECT` | Zenoh router endpoint |
 
 Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` usage/input error. The
 runner passes these through as case verdicts.
+
+### Live observer during a run
+
+Set `E2E_OBSERVER=1` to run each case's collector with `--observer`. The runner
+then builds the collector with `--features observer`, waits until
+`http://$E2E_OBSERVER_ADDR/health` answers, and logs the URL before the replay:
+open `http://127.0.0.1:8090` to watch the current case (20 s window: temperature,
+SoC, model bands, incidents and detected fault classes). The observer lives only
+while that case's collector runs; every case restarts it. Override the address
+with `E2E_OBSERVER_ADDR`. It is read-only and not DoD-critical; contract in
+`product/doc/observer/live_observer.md`.
 
 ## Cases — how to add one
 

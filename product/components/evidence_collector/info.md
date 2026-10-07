@@ -88,3 +88,28 @@ per-sample `OK` message has to be added to the contract (topic URI + payload).
   or the collector must stop after `expected_frames`.
 - [ ] **Language.** Proposal: Rust, reusing `up-rust` + `up-transport-zenoh`
   as in the demo.
+
+## Live Scenario Observer (ADR-016, implemented)
+
+A read-only, feature-flagged browser view of the running case. It reads the
+collector's in-process state (no second process, no extra transport) and serves
+an embedded static frontend plus a Server-Sent Events stream.
+
+```sh
+cargo build --features observer
+cargo run --features observer -- <prefix> --observer \
+    [--observer-addr 127.0.0.1:8090] [--guardian-model FILE]
+# then open http://127.0.0.1:8090
+```
+
+- Routes: `/` (frontend), `/events` (SSE: one `snapshot`, then uncoalesced
+  `sample`/`detection` deltas), `/health`.
+- 20 s sliding window on the relative source timeline (ADR-013).
+- Static bands are derived from `guardian_model.yaml` through the
+  `battery-guardian` library; ground truth comes from `<prefix>.ground_truth.yaml`
+  and the oracle from `<prefix>.oracle.yaml`.
+- Read-only, not a source of truth, not DoD-critical. It displays detected fault
+  classes only; collector status is not shown. v1 shows only DFM-mapped classes
+  (unmapped warnings need the raw decision stream, ADR-007).
+- Feature off (default): no HTTP surface, existing CLI/exit codes unchanged.
+- Contract and limitations: `product/doc/observer/live_observer.md`.

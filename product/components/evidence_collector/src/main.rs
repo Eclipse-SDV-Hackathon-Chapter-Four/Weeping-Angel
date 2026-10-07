@@ -47,6 +47,9 @@ mod oracle;
 mod sovd;
 mod uprotocol;
 
+#[cfg(feature = "observer")]
+pub(crate) mod observer;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::process::ExitCode;
@@ -77,45 +80,68 @@ const STALE_FAULT: &str = "BatteryTempStreamStale";
 const EPOCH_MS: u64 = 1_000_000_000_000;
 
 #[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-enum Stage {
+pub(crate) enum Stage {
     Failed,
     Passed,
 }
 
-/// Evidence fields used from a `GuardianFaultEvent`.
+/// Guardian evidence carried by a `GuardianFaultEvent` (contract
+/// `guardian_fault_event.evidence`); all fields are optional.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
-struct Evidence {
+pub(crate) struct FaultEvidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    signal: Option<String>,
+    pub signal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    timestamp_ms: Option<u64>,
+    pub observed: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residual: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utilization: Option<f64>,
+    /// Source/generation interval Δτ of a temporal check (ADR-015).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u64>,
+    /// Source timestamp of the causing sample (ADR-013).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
 }
 
 /// `GuardianFaultEvent` (contract `guardian_fault_event`); unused fields skipped.
 #[derive(Deserialize, Serialize, Clone, Debug)]
-struct FaultEvent {
-    fault_id: String,
-    detection_class: String,
+pub(crate) struct FaultEvent {
+    pub fault_id: String,
+    pub detection_class: String,
     #[serde(default)]
-    level: String,
-    stage: Stage,
+    pub level: String,
+    pub stage: Stage,
     #[serde(default)]
-    baseline: bool,
+    pub baseline: bool,
     #[serde(default)]
-    evidence: Evidence,
+    pub evidence: FaultEvidence,
 }
 
-/// `BatteryTempEvent`; only the source timestamp is needed.
-#[derive(Deserialize, Clone, Debug)]
-struct BatteryEvent {
-    timestamp_ms: u64,
+/// `BatteryTempEvent`; the source timestamp is the common time base (ADR-013),
+/// the signal values feed the live observer (ADR-016).
+#[derive(Deserialize, Clone, Debug, Default)]
+#[cfg_attr(not(feature = "observer"), allow(dead_code))]
+pub(crate) struct BatteryEvent {
+    pub timestamp_ms: u64,
+    #[serde(default)]
+    pub temp_min: Option<f64>,
+    #[serde(default)]
+    pub temp_avg: Option<f64>,
+    #[serde(default)]
+    pub temp_max: Option<f64>,
+    #[serde(default)]
+    pub soc: Option<f64>,
     /// When the collector received it (set by the listener).
     #[serde(skip)]
     received: Option<Instant>,
 }
 
 #[derive(Debug)]
-enum Message {
+pub(crate) enum Message {
     Fault(FaultEvent),
     Battery(BatteryEvent),
     /// One OpenSOVD poll (`None` if it failed) and when it was answered.
@@ -175,6 +201,10 @@ struct Injection {
     finished_at: Option<u64>,
     #[serde(default)]
     duration_ms: Option<u64>,
+    /// Executed mutations as written by the case mutator; passed through as-is
+    /// for the observer's incident markers.
+    #[serde(default)]
+    mutations: Vec<serde_yaml::Value>,
     /// `[start, finish]` in ms on the source timeline, derived when parsing.
     #[serde(skip)]
     window: (u64, u64),
@@ -718,8 +748,19 @@ struct Args {
     battery_topic: String,
     idle_timeout: Duration,
     sovd_url: Option<String>,
+    /// Bind address of the live observer; `Some` when `--observer` is given.
+    #[cfg(feature = "observer")]
+    observer: Option<String>,
+    /// Guardian model YAML used to derive the static bands.
+    #[cfg(feature = "observer")]
+    guardian_model: Option<String>,
 }
 
+#[cfg(feature = "observer")]
+const USAGE: &str = "usage: evidence_collector <prefix> [--oracle FILE] [--report FILE] \
+[--fault-topic URI] [--battery-topic URI] [--idle-timeout SECS] [--observer] \
+[--observer-addr ADDR] [--guardian-model FILE] [--sovd-url URL | --no-sovd]";
+#[cfg(not(feature = "observer"))]
 const USAGE: &str = "usage: evidence_collector <prefix> [--oracle FILE] [--report FILE] \
 [--fault-topic URI] [--battery-topic URI] [--idle-timeout SECS] [--sovd-url URL | --no-sovd]";
 
@@ -731,6 +772,8 @@ fn parse_args() -> Result<Args> {
     let mut battery_topic = uprotocol::DEFAULT_BATTERY_TOPIC.to_owned();
     let mut idle_timeout = Duration::from_secs(3);
     let mut sovd_url = Some(sovd::DEFAULT_URL.to_owned());
+    #[cfg(feature = "observer")]
+    let (mut observer, mut guardian_model) = (None, None);
     while let Some(arg) = it.next() {
         let mut value = || it.next().with_context(|| format!("{arg} needs a value"));
         match arg.as_str() {
@@ -743,6 +786,12 @@ fn parse_args() -> Result<Args> {
             "--idle-timeout" => {
                 idle_timeout = Duration::from_secs_f64(value()?.parse().context("--idle-timeout")?)
             }
+            #[cfg(feature = "observer")]
+            "--observer" => observer = Some(observer::DEFAULT_ADDR.to_owned()),
+            #[cfg(feature = "observer")]
+            "--observer-addr" => observer = Some(value()?),
+            #[cfg(feature = "observer")]
+            "--guardian-model" => guardian_model = Some(value()?),
             "-h" | "--help" => bail!(USAGE),
             _ if prefix.is_none() => prefix = Some(arg),
             _ => bail!("unexpected argument: {arg}\n{USAGE}"),
@@ -756,6 +805,10 @@ fn parse_args() -> Result<Args> {
         battery_topic,
         idle_timeout,
         sovd_url,
+        #[cfg(feature = "observer")]
+        observer,
+        #[cfg(feature = "observer")]
+        guardian_model,
     })
 }
 
@@ -854,6 +907,13 @@ async fn run() -> Result<Verdict> {
         oracle.transitions.len()
     );
 
+    #[cfg(feature = "observer")]
+    let observer = setup_observer(&args, &injections);
+    #[cfg(feature = "observer")]
+    let sink = observer.clone().and_then(observer::sink);
+    #[cfg(not(feature = "observer"))]
+    let sink: uprotocol::Sink = None;
+
     let topics = [&args.fault_topic, &args.battery_topic]
         .into_iter()
         .map(|t| UUri::from_str(t).with_context(|| format!("invalid topic {t}")))
@@ -862,7 +922,7 @@ async fn run() -> Result<Verdict> {
         end_ms: replay_end_ms,
         idle_timeout: args.idle_timeout,
     };
-    let messages = uprotocol::collect(&topics, args.sovd_url.as_deref(), &stop).await?;
+    let messages = uprotocol::collect(&topics, args.sovd_url.as_deref(), &stop, sink).await?;
 
     let report = evaluate(
         &Case {
@@ -895,6 +955,67 @@ async fn run() -> Result<Verdict> {
     Ok(report.verdict)
 }
 
+#[cfg(feature = "observer")]
+const DEFAULT_GUARDIAN_MODEL: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../config/battery_guardian/guardian_model.yaml"
+);
+
+/// Builds the observer state, loads bands/ground truth/oracle, and spawns the
+/// HTTP server. Returns `None` unless `--observer` was given.
+#[cfg(feature = "observer")]
+fn setup_observer(args: &Args, injections: &[Injection]) -> Option<observer::Handle> {
+    let addr = args.observer.clone()?;
+    let incidents = injections
+        .iter()
+        .map(|i| observer::Incident {
+            injection_id: i.injection_id.clone(),
+            injected_class: i.injected_class.clone(),
+            start_ms: i.window.0,
+            end_ms: i.window.1,
+            mutations: i.mutations.clone(),
+        })
+        .collect();
+    let run_id = injections.iter().find_map(|i| i.run_id.clone());
+    let handle = observer::Observer::new(
+        run_id,
+        load_bands(args.guardian_model.as_deref()),
+        incidents,
+        load_oracle(&args.oracle, &args.prefix),
+    );
+    let server = handle.clone();
+    tokio::spawn(async move {
+        if let Err(e) = observer::serve(addr, server).await {
+            eprintln!("observer: {e:#}");
+        }
+    });
+    Some(handle)
+}
+
+/// Static bands from the authoritative Guardian model (ADR-005, ADR-016).
+#[cfg(feature = "observer")]
+fn load_bands(path: Option<&str>) -> Option<observer::Bands> {
+    let env = std::env::var("GUARDIAN_MODEL").ok();
+    let path = path.or(env.as_deref()).unwrap_or(DEFAULT_GUARDIAN_MODEL);
+    match battery_guardian::GuardianConfig::load(path) {
+        Ok(cfg) => Some(observer::Bands::from_config(&cfg)),
+        Err(e) => {
+            eprintln!("observer: cannot load model {path}: {e:#}");
+            None
+        }
+    }
+}
+
+/// The experiment oracle, passed through as JSON for the expected lane.
+/// Absent for baseline cases.
+#[cfg(feature = "observer")]
+fn load_oracle(oracle: &Option<String>, prefix: &str) -> Option<serde_json::Value> {
+    let path = oracle.clone().unwrap_or_else(|| format!("{prefix}.oracle.yaml"));
+    let src = fs::read_to_string(&path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&src).ok()?;
+    serde_json::to_value(value).ok()
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run().await {
@@ -917,7 +1038,7 @@ mod tests {
     fn battery(t: u64) -> Message {
         Message::Battery(BatteryEvent {
             timestamp_ms: t,
-            received: None,
+            ..Default::default()
         })
     }
 
@@ -929,9 +1050,10 @@ mod tests {
             level: "VIOLATION".into(),
             stage,
             baseline: false,
-            evidence: Evidence {
+            evidence: FaultEvidence {
                 signal: Some("temp_min".into()),
                 timestamp_ms: ts,
+                ..Default::default()
             },
         })
     }
@@ -1133,7 +1255,7 @@ guardian:
             level: "VIOLATION".into(),
             stage: Stage::Passed,
             baseline: true,
-            evidence: Evidence::default(),
+            evidence: FaultEvidence::default(),
         }));
         assert_eq!(check(&m).verdict, Verdict::Pass);
     }
@@ -1218,13 +1340,13 @@ guardian:
         let at = |ms: u64| Some(base + Duration::from_millis(ms));
         let mut m = vec![sovd("BatteryTempStreamStale", false, 0)];
         for t in (0..=7900).step_by(100) {
-            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t) }));
+            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t), ..Default::default() }));
         }
         m.push(fault("STREAM_STALE", Stage::Failed, Some(8500)));
         let Message::Sovd(snapshot, _) = sovd("BatteryTempStreamStale", true, 1) else { unreachable!() };
         m.push(Message::Sovd(snapshot, at(8550)));
         for t in (8600..=END).step_by(100) {
-            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t) }));
+            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t), ..Default::default() }));
         }
         let r = check_with(stale_oracle, Some("http://sovd"), &m);
         assert_eq!(r.transitions[0].sovd_visible_at_ms, Some(8550));

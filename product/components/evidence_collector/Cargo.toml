@@ -3,15 +3,25 @@ name = "evidence_collector"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# Live Scenario Observer (ADR-016): read-only HTTP + SSE view of the live run.
+observer = ["dep:axum", "dep:battery-guardian", "dep:futures-util"]
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
 # OpenSOVD polling (plain HTTP on localhost, no TLS needed)
 reqwest = { version = "0.12", default-features = false }
+
+# Optional, only with the `observer` feature.
+axum = { version = "0.7", optional = true }
+battery-guardian = { path = "../guardien", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 # uProtocol over Zenoh, same versions as the demo services
 up-rust = "0.9"

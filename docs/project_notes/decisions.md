@@ -471,7 +471,6 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ A source restart without a stale phase is not recognised (no gaps until the new timeline passes `ts_max`); out-of-order samples still update the previous sample.
 
 ### ADR-016: Live scenario observer as a feature-flagged module of the Evidence Collector (2026-10-07)
-
 **Context:**
 - A browser view of a running campaign experiment is wanted: live battery signals, model ranges, detected fault classes, and the injected incidents on one relative-time axis.
 - The Evidence Collector already subscribes to the battery stream and the Guardian fault-event stream and holds the correlation state; candidate collector→UI paths were REST/SSE, library binding, iceoryx2 IPC, and uProtocol.
@@ -497,3 +496,29 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ v1 shows only DFM-mapped classes; unmapped warnings stay invisible until the raw decision stream (ADR-007) exists (bug logged).
 - ❌ Binding `oracle.yaml` as the collector's expectation source requires the ADR-012 amendment.
 - ❌ Dynamic limits are rendered step-after because fault-level `evidence` exists only at transitions.
+
+### ADR-017: Fault events carry the source timestamp of their causing sample (2026-10-07)
+
+**Context:**
+- The Evidence Collector reconstructs the time of each `GuardianFaultEvent` on the battery timeline by stamping it with the `timestamp_ms` of the *latest* battery event seen before the fault event arrived (`timeline()` in `evidence_collector/src/main.rs`). `GuardianFaultEvent`s carry no time of their own (ADR-012).
+- Zenoh gives no cross-topic ordering guarantee, so a fault event can arrive before its causing `BatteryTempEvent`; combined with arrival jitter the collector placed a detection that fired on the first mutated frame (window start = injection time, t = 2000 ms) one sample early (t = 1997/1998 ms) → the injection window `[2000, 3000]` missed the detection and the case verdict flipped FAIL/PASS between identical reruns.
+- Golden runs showed this anchoring artifact is systematic, not noise: whenever a detection fires on the frame at a window edge, the reconstructed time is one sample behind by construction.
+
+**Decision:**
+- `GuardianFaultEvent` (and `GuardianEvidenceEvent`) gains a required `timestamp_ms` field: the source-relative `timestamp_ms` of the battery sample that caused the detection, copied from `BatteryTempEvent` (ADR-013 time base; a fault aggregate of several samples carries the earliest causing timestamp).
+- The timestamp is carried unchanged from the CAN frame through the pipeline: the bridge preserves the CAN `TimeStamp` in `BatteryTempEvent.timestamp_ms` (replacing its wall-clock `now_ms()` stamping — this closes the ADR-015 ❌ bridge open point), and the Guardian copies the causing sample's timestamp into every fault/evidence event it emits, together with the ADR-015 `interval_ms` evidence.
+- The Evidence Collector uses the event-carried `timestamp_ms` for window correlation and stops reconstructing it from arrival order; `t_ms` falls back to the latest-battery-event anchoring only for events without a timestamp (legacy/baseline events), reported as such in the report notes.
+- This is a contract change: `product/interfaces/battery_fault_contract.yaml` gains the required field, and the Guardian/mutator/collector must be updated together.
+
+**Alternatives Considered:**
+- Tolerance of ±1 sample (100 ms) around window edges in the collector → Rejected as primary fix: masks the anchoring artifact instead of removing it; the wrong time stays in `verdict.json` and every downstream report.
+- Collector-side anchoring at the *next* battery event instead of the latest → Rejected: wrong by construction for `STREAM_STALE`-type faults, which legitimately fire late without a new sample.
+- Wall-clock timestamps on fault events → Rejected: not on the ADR-013 relative time base, not replay-deterministic (same reason ADR-012 rebases on the battery timeline).
+
+**Consequences:**
+- ✅ Detection-time correlation is exact and deterministic on the shared relative axis; no dependence on Zenoh delivery order or arrival jitter.
+- ✅ The injection-window flake (FAIL/PASS between identical reruns) is fixed at the cause; detection latency (`detected_at_ms − source_started_at_ms`) becomes meaningful.
+- ✅ The bridge stops stamping wall-clock `now_ms()`, closing the ADR-015/ADR-013 bridge open point; rates and gap detection consume the real Δτ.
+- ❌ The bridge must pass the CAN `TimeStamp` through the Data Broker/VSS path first (ADR-013 migration): until then the CAN value is unavailable at the bridge, so the migration and this change land together.
+- ❌ Contract churn: contract YAML, Guardian emit path, collector decoding, and the live observer (ADR-016) must be updated; `t_ms` in old reports remains anchoring-based (noted per report).
+- ❌ Baseline/startup fault events without a causing sample (DFM startup baseline) carry no `timestamp_ms`; the collector reports them as unsplaced.

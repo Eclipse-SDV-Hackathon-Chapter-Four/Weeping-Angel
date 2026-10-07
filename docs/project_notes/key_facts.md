@@ -89,7 +89,7 @@ Never store credentials here — this file is committed to git.
 - Subscribes directly to `battery-vss/9001/1/9001` and receives the same BatteryTempEvent payloads, including zero-based `timestamp_ms`, as the Guardian
 - Subscribes to the raw `GuardianEvidenceEvent` stream and receives every original Guardian decision, including decisions omitted from or aggregated by the DFM projection; its URI/RID remains to be fixed in the interface contract
 - Correlates source battery input, original Guardian decisions, injection ground truth, and DFM/OpenSOVD visibility; the direct subscriptions do not replace the diagnostic chain
-- Live Scenario Observer: feature-flagged module (`observer`) plus CLI option `--observer` inside the collector binary; serves a read-only static SSE frontend from in-process collector state (ADR-016, `product/doc/observer/live_observer.md`)
+- Live Scenario Observer: feature-flagged module (`observer`) plus CLI option `--observer` inside the collector binary; serves a read-only static SSE frontend from in-process collector state (ADR-016, `product/doc/observer/live_observer.md`); the end2end-runner starts it with `E2E_OBSERVER=1`
 
 ## CAN Assets (`demo/can/`)
 

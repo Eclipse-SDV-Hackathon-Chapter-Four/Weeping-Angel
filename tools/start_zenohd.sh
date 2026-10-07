@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ENDPOINT="tcp/127.0.0.1:7447"
-LOG="/tmp/zenohd.log"
+LOG="${ZENOH_LOG:-/tmp/zenohd.log}"
 
 if ! command -v zenohd >/dev/null; then
   echo "zenohd: not installed (rebuild the dev container), not starting"
