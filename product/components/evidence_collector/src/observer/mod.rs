@@ -151,6 +151,9 @@ impl Observer {
         match message {
             Message::Battery(b) => self.record_sample(b),
             Message::Fault(f) => self.record_fault(f),
+            // Raw evidence events are not part of the observer v1 view:
+            // the mapped fault stream already covers the observer timeline.
+            Message::Evidence(..) => {}
             // OpenSOVD findings are not part of the observer v1 view (ADR-016).
             Message::Sovd(..) => {}
         }
@@ -242,6 +245,36 @@ impl Observer {
     fn subscribe(&self) -> broadcast::Receiver<LiveEvent> {
         self.tx.subscribe()
     }
+
+    /// The current state as a standalone JSON document (ADR-018 export).
+    pub(crate) fn snapshot_json(&self) -> String {
+        self.snapshot().1
+    }
+
+    /// The frozen state as one self-contained, offline-openable HTML document:
+    /// CSS and JS are inlined and the snapshot is injected so the page renders
+    /// without an HTTP server or SSE connection (ADR-018).
+    pub(crate) fn export_html(&self) -> String {
+        // Escape `<` so a string in the snapshot cannot close the script tag.
+        let snapshot = self.snapshot_json().replace('<', "\\u003c");
+        include_str!("index.html")
+            .replace(
+                r#"<link rel="stylesheet" href="/style.css">"#,
+                &format!("<style>\n{}\n</style>", include_str!("style.css")),
+            )
+            .replace(
+                r#"<script src="/app.js"></script>"#,
+                &format!(
+                    "<script>window.__OBSERVER_SNAPSHOT__ = {snapshot};</script>\n<script>\n{}\n</script>",
+                    include_str!("app.js")
+                ),
+            )
+    }
+
+    /// Writes the self-contained document to `path` (ADR-018).
+    pub(crate) fn dump_html(&self, path: &std::path::Path) -> std::io::Result<()> {
+        std::fs::write(path, self.export_html())
+    }
 }
 
 /// Builds the live sink passed to the subscription loop.
@@ -265,6 +298,8 @@ async fn serve_on(listener: tokio::net::TcpListener, handle: Handle) -> anyhow::
         .route("/style.css", get(style_css))
         .route("/health", get(|| async { "ok" }))
         .route("/events", get(events))
+        .route("/snapshot.json", get(snapshot_json))
+        .route("/export.html", get(export_html))
         .with_state(handle);
     axum::serve(listener, app).await?;
     Ok(())
@@ -288,6 +323,20 @@ async fn style_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         include_str!("style.css"),
+    )
+}
+
+async fn snapshot_json(State(handle): State<Handle>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        handle.snapshot_json(),
+    )
+}
+
+async fn export_html(State(handle): State<Handle>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        handle.export_html(),
     )
 }
 
@@ -400,6 +449,27 @@ mod tests {
         assert_eq!(bands.temp_abs_max_c, 70.0);
         assert_eq!(bands.temp_warning_c, 60.0);
         assert_eq!(bands.temp_abs_min_c, -30.0);
+    }
+
+    #[test]
+    fn export_html_inlines_assets_and_injects_snapshot() {
+        let h = observer();
+        sample(&h, 0);
+        let html = h.export_html();
+        assert!(html.contains("window.__OBSERVER_SNAPSHOT__ = {"), "{html}");
+        assert!(html.contains("\"type\":\"snapshot\""), "{html}");
+        assert!(!html.contains("src=\"/app.js\""), "{html}");
+        assert!(!html.contains("href=\"/style.css\""), "{html}");
+        assert!(html.contains("<style>"), "{html}");
+    }
+
+    #[test]
+    fn snapshot_json_is_machine_readable() {
+        let h = observer();
+        sample(&h, 0);
+        let json: serde_json::Value = serde_json::from_str(&h.snapshot_json()).unwrap();
+        assert_eq!(json["type"], "snapshot");
+        assert!(json["samples"].as_array().is_some());
     }
 
     /// The browser-facing contract: the first SSE frame is a `snapshot` that

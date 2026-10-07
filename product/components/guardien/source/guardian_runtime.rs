@@ -70,6 +70,11 @@ impl GuardianRuntime {
                     None,
                     now,
                 );
+                // STREAM_STALE has no direct causing sample, but it must stay
+                // placed on the source timeline: the oracle keys staleness to
+                // the deadline the last sample violated (ADR-017). The receive
+                // age is rounded up to whole evaluation periods, since
+                // staleness is decided once per cycle (ADR-013 projection).
                 stale.sample_timestamp_ms = self
                     .last_timestamp_ms
                     .map(|last| last + projected_age_ms(age, config));
@@ -175,9 +180,7 @@ impl GuardianRuntime {
 }
 
 /// Receive age projected onto the source timeline (ADR-013): rounded up to
-/// whole evaluation periods, since staleness is decided once per cycle. A
-/// stale fault has no causing sample, so it is placed at the last source
-/// timestamp plus this age instead of at the last sample itself.
+/// whole evaluation periods, since staleness is decided once per cycle.
 fn projected_age_ms(age: std::time::Duration, config: &GuardianConfig) -> u64 {
     let period_ms = config.evaluation_period().as_millis().max(1) as u64;
     (age.as_millis() as u64).div_ceil(period_ms) * period_ms
@@ -277,15 +280,38 @@ mod tests {
         let base = origin();
         let cfg = config();
         // Detected at the first cycle after the timeout, wherever that cycle
-        // falls relative to the last arrival: always 600 ms on the source time.
+        // falls relative to the last arrival: always 600 ms on the source
+        // time (staleness deadline of the last sample, ADR-017 projection).
         for late_ms in [501, 570, 600] {
             let mut rt = GuardianRuntime::new();
             rt.receive_sample(generated(7_900, base));
             rt.cycle(base, &cfg);
             let stale = rt.cycle(base + Duration::from_millis(late_ms), &cfg);
             assert_eq!(stale[0].class, DetectionClass::StreamStale);
-            assert_eq!(stale[0].sample_timestamp_ms, Some(8_500), "detected after {late_ms} ms");
+            assert_eq!(
+                stale[0].sample_timestamp_ms,
+                Some(8_500),
+                "detected after {late_ms} ms"
+            );
         }
+
+        // A decode-stream fault evaluated on a received sample is placed:
+        // the event carries the causing sample's source timestamp.
+        let mut rt = GuardianRuntime::new();
+        rt.receive_sample(BatterySample::new(
+            cfg.temperature.absolute_min_c - 1.0,
+            20.0,
+            22.0,
+            50.0,
+            0,
+            base,
+        ));
+        let first = rt.cycle(base, &cfg);
+        let absolute = first
+            .iter()
+            .find(|detection| detection.class == DetectionClass::PhysicalTempAbsoluteLimit)
+            .expect("absolute limit detection");
+        assert_eq!(absolute.sample_timestamp_ms, Some(0));
     }
 
     #[test]

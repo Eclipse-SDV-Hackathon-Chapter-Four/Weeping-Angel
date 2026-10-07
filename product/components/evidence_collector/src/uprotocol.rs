@@ -13,6 +13,8 @@ use crate::{decode_message, Message};
 
 /// `GuardianFaultEvent` topic (`guardian_fault_event.uri` in the contract).
 pub const DEFAULT_FAULT_TOPIC: &str = "//guardian/1001/1/8001";
+/// Raw `GuardianEvidenceEvent` topic (ADR-007 raw decision stream).
+pub const DEFAULT_EVIDENCE_TOPIC: &str = "//guardian-vss/9000/1/9003";
 /// `BatteryTempEvent` topic of the VSS bridge (ADR-007).
 pub const DEFAULT_BATTERY_TOPIC: &str = "//battery-vss/9001/1/9001";
 
@@ -134,6 +136,15 @@ pub async fn collect(
                                 eprintln!("fault event: {} {} {:?}", f.detection_class, f.level, f.stage);
                             }
                         }
+                        Message::Evidence(e) => {
+                            if last_activity.is_some() {
+                                last_activity = Some(tokio::time::Instant::now());
+                            }
+                            eprintln!(
+                                "evidence event: {} {} {} {}",
+                                e.detection_class, e.level, e.stage, e.signal.as_deref().unwrap_or("-")
+                            );
+                        }
                         Message::Sovd(..) => {}
                     }
                     if let Some(sink) = &sink {
@@ -159,7 +170,9 @@ pub async fn collect(
         poller.abort();
     }
     for topic in topics {
-        let _ = transport.unregister_listener(topic, None, listener.clone()).await;
+        let _ = transport
+            .unregister_listener(topic, None, listener.clone())
+            .await;
     }
     Ok(messages)
 }
@@ -175,6 +188,16 @@ mod tests {
         assert_eq!(
             contract["guardian_fault_event"]["uri"].as_str(),
             Some(DEFAULT_FAULT_TOPIC)
+        );
+    }
+
+    #[test]
+    fn evidence_topic_matches_contract() {
+        let contract: serde_yaml::Value =
+            serde_yaml::from_str(crate::CONTRACT).expect("contract parses");
+        assert_eq!(
+            contract["guardian_evidence_event"]["uri"].as_str(),
+            Some(DEFAULT_EVIDENCE_TOPIC)
         );
     }
 }

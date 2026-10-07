@@ -72,7 +72,10 @@ pub fn parse(body: &[u8]) -> Result<Snapshot> {
 /// Polls `url` every [`POLL_INTERVAL`] and forwards each result (or `None`
 /// for a failed poll) into the collector's message channel, so polls keep
 /// their order relative to the uProtocol messages.
-pub fn spawn_poller(url: String, tx: mpsc::UnboundedSender<Message>) -> tokio::task::JoinHandle<()> {
+pub fn spawn_poller(
+    url: String,
+    tx: mpsc::UnboundedSender<Message>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(500))
@@ -83,12 +86,21 @@ pub fn spawn_poller(url: String, tx: mpsc::UnboundedSender<Message>) -> tokio::t
         loop {
             interval.tick().await;
             let snapshot = async {
-                let body = client.get(&url).send().await?.error_for_status()?.bytes().await?;
+                let body = client
+                    .get(&url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes()
+                    .await?;
                 parse(&body)
             }
             .await
             .ok();
-            if tx.send(Message::Sovd(snapshot, Some(std::time::Instant::now()))).is_err() {
+            if tx
+                .send(Message::Sovd(snapshot, Some(std::time::Instant::now())))
+                .is_err()
+            {
                 break;
             }
         }
@@ -107,8 +119,20 @@ mod tests {
              "status":{"confirmed_dtc":false,"mask":"0x01","pending_dtc":false,"test_failed":true}},
             {"code":"BatteryTempRate","status":{"test_failed":false}}]}}"#;
         let s = parse(body).unwrap();
-        assert_eq!(s["BatteryTempAbsoluteLimit"], FaultState { active: true, occurrences: 2 });
-        assert_eq!(s["BatteryTempRate"], FaultState { active: false, occurrences: 0 });
+        assert_eq!(
+            s["BatteryTempAbsoluteLimit"],
+            FaultState {
+                active: true,
+                occurrences: 2
+            }
+        );
+        assert_eq!(
+            s["BatteryTempRate"],
+            FaultState {
+                active: false,
+                occurrences: 0
+            }
+        );
         assert!(parse(b"{}").is_err());
     }
 }

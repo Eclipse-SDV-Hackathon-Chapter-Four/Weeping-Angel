@@ -89,14 +89,18 @@ fn decode_battery_event(message: &UMessage) -> Result<BatteryTempEvent> {
 }
 
 /// Fault-reporting channels; each receives every fault-level change
-/// independently (ADR-007).
+/// independently (ADR-007). `evidence` additionally mirrors every raw
+/// detection transition (mapped or not) onto the `GuardianEvidenceEvent`
+/// topic.
 struct FaultChannels {
     aggregator: FaultAggregator,
     dfm: FaultReporterHandle,
     uprotocol: FaultEventPublisherHandle,
+    evidence: guardian_uprotocol::EvidenceEventPublisherHandle,
 }
 
 fn report_detection(detection: &Detection, faults: &mut FaultChannels) {
+    faults.evidence.publish(detection);
     if let Some(event) = faults.aggregator.apply(detection) {
         faults.dfm.report(&event);
         faults.uprotocol.publish(&event);
@@ -284,10 +288,12 @@ async fn main() -> Result<()> {
 
     let sovd_path =
         std::env::var("GUARDIAN_SOVD_PATH").unwrap_or_else(|_| "battery_guardian".to_string());
+    let run_id = std::env::var("GUARDIAN_RUN_ID").unwrap_or_else(|_| "unknown".to_string());
     let faults = FaultChannels {
         aggregator: FaultAggregator::default(),
         dfm: guardian_reporting::spawn(fault_catalog_path(), sovd_path.clone()),
         uprotocol: guardian_uprotocol::spawn(Arc::clone(&transport), sovd_path),
+        evidence: guardian_uprotocol::spawn_evidence(Arc::clone(&transport), run_id),
     };
     let _periodic_guardian = start_periodic_guardian(state.clone(), config, faults);
 

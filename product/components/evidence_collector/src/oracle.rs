@@ -19,10 +19,18 @@ use crate::Stage;
 /// by a test).
 pub const DFM_MAPPINGS: [(&str, &str, &str); 12] = [
     ("STREAM_STALE", "VIOLATION", "BatteryTempStreamStale"),
-    ("STREAM_GENERATION_GAP", "VIOLATION", "BatteryTempGenerationGap"),
+    (
+        "STREAM_GENERATION_GAP",
+        "VIOLATION",
+        "BatteryTempGenerationGap",
+    ),
     ("THERMAL_LIMIT", "WARNING", "BatteryOverTempWarning"),
     ("THERMAL_LIMIT", "CRITICAL", "BatteryOverTempCritical"),
-    ("PHYSICAL_TEMP_ABSOLUTE_LIMIT", "VIOLATION", "BatteryTempAbsoluteLimit"),
+    (
+        "PHYSICAL_TEMP_ABSOLUTE_LIMIT",
+        "VIOLATION",
+        "BatteryTempAbsoluteLimit",
+    ),
     ("PHYSICAL_TEMP_ORDERING", "VIOLATION", "BatteryTempOrdering"),
     ("PHYSICAL_TEMP_SPREAD", "VIOLATION", "BatteryTempSpread"),
     ("PHYSICAL_TEMP_HOTSPOT", "VIOLATION", "BatteryTempHotspot"),
@@ -49,9 +57,21 @@ pub struct Transition {
     pub signal: Option<String>,
 }
 
+/// Source window `{ start, end }` in ms (oracle header, case mutator).
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub struct Window {
+    /// Kept for the documented header shape; only `end` is judged here.
+    #[allow(dead_code)]
+    pub start: u64,
+    pub end: u64,
+}
+
 pub struct Oracle {
     pub allow_unspecified: bool,
     pub transitions: Vec<Transition>,
+    /// `source_window_ms` header of scenario oracles; `None` for hand-written
+    /// ones. The end marks the end of the covered stream.
+    pub source_window_ms: Option<Window>,
 }
 
 /// A fault-level change the Guardian must publish.
@@ -66,6 +86,8 @@ pub struct Expected {
 
 #[derive(Deserialize)]
 struct File {
+    #[serde(default)]
+    source_window_ms: Option<Window>,
     guardian: GuardianSection,
 }
 
@@ -110,7 +132,11 @@ pub fn parse(src: &str) -> Result<Oracle> {
         let times: Vec<u64> = match e.at_ms {
             At::Once(t) => vec![t],
             At::Every { every: 0, .. } => bail!("{} {}: `every` must be > 0", e.class, e.level),
-            At::Every { from, through, every } => (from..=through).step_by(every as usize).collect(),
+            At::Every {
+                from,
+                through,
+                every,
+            } => (from..=through).step_by(every as usize).collect(),
         };
         let signals: Vec<Option<String>> = match (e.signals, e.signal) {
             (Some(list), _) => list.into_iter().map(Some).collect(),
@@ -132,6 +158,7 @@ pub fn parse(src: &str) -> Result<Oracle> {
     Ok(Oracle {
         allow_unspecified: file.guardian.allow_unspecified,
         transitions,
+        source_window_ms: file.source_window_ms,
     })
 }
 
@@ -174,7 +201,11 @@ pub fn project(oracle: &Oracle) -> (Vec<Expected>, usize) {
                     fault_id: id.to_owned(),
                     detection_class: t.class.clone(),
                     level: t.level.clone(),
-                    stage: if is_failed { Stage::Failed } else { Stage::Passed },
+                    stage: if is_failed {
+                        Stage::Failed
+                    } else {
+                        Stage::Passed
+                    },
                 });
             }
         }
@@ -200,6 +231,7 @@ mod tests {
         let (e, _) = project(&Oracle {
             allow_unspecified: false,
             transitions: oracle,
+            source_window_ms: None,
         });
         e.iter().map(|e| (e.at_ms, e.stage)).collect()
     }
@@ -262,6 +294,7 @@ mod tests {
         let (e, na) = project(&Oracle {
             allow_unspecified: false,
             transitions: vec![warning],
+            source_window_ms: None,
         });
         assert!(e.is_empty());
         assert_eq!(na, 1);
@@ -290,7 +323,12 @@ mod tests {
             block
                 .split(key)
                 .skip(1)
-                .map(|s| s.split(|c: char| !c.is_alphanumeric()).next().unwrap().to_owned())
+                .map(|s| {
+                    s.split(|c: char| !c.is_alphanumeric())
+                        .next()
+                        .unwrap()
+                        .to_owned()
+                })
                 .collect()
         };
         let classes = after("DetectionClass::");
@@ -320,7 +358,11 @@ mod tests {
         ] {
             parse(src).unwrap();
         }
-        let hot = parse(include_str!("../../../tests/battery_campaign/scenarios/2_hot_nominal.oracle.yaml")).unwrap();
+        let hot = parse(include_str!(
+            "../../../tests/battery_campaign/scenarios/2_hot_nominal.oracle.yaml"
+        ))
+        .unwrap();
+        assert_eq!(hot.source_window_ms.map(|w| w.end), Some(19_900));
         let (e, _) = project(&hot);
         assert_eq!(e[0].fault_id, "BatteryOverTempWarning");
         assert_eq!((e[0].at_ms, e[0].stage), (0, Stage::Failed));

@@ -4,7 +4,10 @@
 //! `<prefix>.oracle.yaml`, the replay `<prefix>.asc` and, if present, the
 //! ground truth `<prefix>.ground_truth.yaml` (`<prefix>.json` as fallback),
 //! then listens on uProtocol to
-//! - `GuardianFaultEvent` (`//guardian/1001/1/8001`): fault-level changes, and
+//! - `GuardianFaultEvent` (`//guardian/1001/1/8001`): fault-level changes,
+//! - `GuardianEvidenceEvent` (`//guardian-vss/9000/1/9003`): raw Guardian
+//!   detection transitions (mapped or not), counted in the report notes and
+//!   never part of the verdict (ADR-007 raw decision stream), and
 //! - `BatteryTempEvent` (`//battery-vss/9001/1/9001`): the battery stream,
 //!
 //! and polls the DFM's faults in OpenSOVD (`--sovd-url`, `dfm_sovd_bridge`).
@@ -22,6 +25,10 @@
 //! fault level (see `oracle`). Every expected `Failed`/`Passed` change must
 //! arrive within `[at_ms, at_ms + 100]` (Guardian slack); any other change is
 //! unexpected and fails the case unless the oracle sets `allow_unspecified`.
+//! Guardian events strictly after the end of the covered stream (oracle
+//! `source_window_ms.end`, else the last ground-truth finish) are
+//! post-horizon: reported, but not verdict-relevant — absent both sources the
+//! old fail-closed behaviour applies.
 //! Detection transitions without a DFM fault are not published and counted
 //! as not applicable.
 //!
@@ -144,19 +151,45 @@ pub(crate) struct BatteryEvent {
     received: Option<Instant>,
 }
 
+/// `GuardianEvidenceEvent` (contract `guardian_evidence_event`): one raw
+/// Guardian detection transition, mapped or not (ADR-007). The raw stream is
+/// statistics-only evidence; it never feeds the ADR-012 verdict logic.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+pub(crate) struct EvidenceEvent {
+    pub run_id: String,
+    pub detection_class: String,
+    #[serde(default)]
+    pub level: String,
+    /// `active` | `cleared` (detection state).
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub signal: Option<String>,
+    /// Source timestamp of the causing sample (ADR-017); absent for
+    /// transitions without one (baseline/all-clear only — STREAM_STALE is
+    /// anchored to its projected staleness deadline on the source timeline).
+    #[serde(default)]
+    pub timestamp_ms: Option<u64>,
+}
+
 #[derive(Debug)]
 pub(crate) enum Message {
     Fault(FaultEvent),
+    /// Raw Guardian detection transition (ADR-007 raw evidence stream).
+    Evidence(EvidenceEvent),
     Battery(BatteryEvent),
     /// One OpenSOVD poll (`None` if it failed) and when it was answered.
     Sovd(Option<sovd::Snapshot>, Option<Instant>),
 }
 
-/// Decodes a payload as fault event (has `fault_id`) or battery event.
+/// Decodes a payload as fault event (has `fault_id`), raw evidence event
+/// (has `run_id` + `detection_class`), or battery event.
 fn decode_message(payload: &[u8]) -> Result<Message> {
     let value: serde_json::Value = serde_json::from_slice(payload)?;
     if value.get("fault_id").is_some() {
         Ok(Message::Fault(serde_json::from_value(value)?))
+    } else if value.get("detection_class").is_some() && value.get("run_id").is_some() {
+        Ok(Message::Evidence(serde_json::from_value(value)?))
     } else {
         Ok(Message::Battery(serde_json::from_value(value)?))
     }
@@ -226,10 +259,16 @@ impl Injection {
             })?,
             (None, None) => bail!("{id}: needs source_started_at_ms"),
         };
-        let finish = match (self.source_finished_at_ms, self.finished_at, self.duration_ms) {
+        let finish = match (
+            self.source_finished_at_ms,
+            self.finished_at,
+            self.duration_ms,
+        ) {
             (Some(f), _, _) | (None, Some(f), _) => f,
             (None, None, Some(d)) => start + d,
-            (None, None, None) => bail!("{id}: needs source_finished_at_ms, finished_at or duration_ms"),
+            (None, None, None) => {
+                bail!("{id}: needs source_finished_at_ms, finished_at or duration_ms")
+            }
         };
         if finish < start {
             bail!("{id}: finished before it started");
@@ -288,6 +327,8 @@ struct Timeline {
     /// Last battery position (`None` if no battery event arrived).
     battery_end: Option<u64>,
     sovd: SovdTimeline,
+    /// Raw evidence events, counted but not judged (ADR-007 raw stream).
+    evidence: Vec<EvidenceEvent>,
 }
 
 /// Places battery and fault events and OpenSOVD activations on the replay
@@ -302,6 +343,7 @@ fn timeline(messages: &[Message], replay: &Replay) -> Timeline {
     let mut last_source: Option<u64> = None;
     let mut last_arrival: Option<Instant> = None;
     let mut faults = Vec::new();
+    let mut evidence = Vec::new();
     let mut sovd = SovdTimeline::default();
     let mut previous = sovd::Snapshot::new();
     for m in messages {
@@ -312,8 +354,13 @@ fn timeline(messages: &[Message], replay: &Replay) -> Timeline {
                 last_source = Some(source);
                 last_arrival = b.received;
             }
+            Message::Evidence(e) => evidence.push(e.clone()),
             Message::Fault(f) => {
-                let t_ms = match (f.evidence.timestamp_ms.and_then(|ts| clock.other(ts)), last_source, now) {
+                let t_ms = match (
+                    f.evidence.timestamp_ms.and_then(|ts| clock.other(ts)),
+                    last_source,
+                    now,
+                ) {
                     // Later than any frame received: a projected time (stale).
                     (Some(e), Some(ls), Some(n)) if e > ls => Some(n + (e - ls)),
                     (Some(e), _, _) => Some(replay.arrival(e).unwrap_or_else(|| replay.nominal(e))),
@@ -325,7 +372,9 @@ fn timeline(messages: &[Message], replay: &Replay) -> Timeline {
             Message::Sovd(Some(snapshot), polled) => {
                 sovd.polls += 1;
                 let at = match (now, last_arrival, polled) {
-                    (Some(t), Some(a), Some(p)) => Some(t + p.saturating_duration_since(a).as_millis() as u64),
+                    (Some(t), Some(a), Some(p)) => {
+                        Some(t + p.saturating_duration_since(a).as_millis() as u64)
+                    }
                     _ => now,
                 };
                 for (code, state) in snapshot {
@@ -351,6 +400,7 @@ fn timeline(messages: &[Message], replay: &Replay) -> Timeline {
         faults,
         battery_end: now,
         sovd,
+        evidence,
     }
 }
 
@@ -441,7 +491,7 @@ fn asc_end_ms(asc: &str) -> Result<u64> {
     let last_s = asc
         .lines()
         .filter_map(|l| l.split_whitespace().next()?.parse::<f64>().ok())
-        .last()
+        .next_back()
         .context("no frames")?;
     Ok((last_s * 1000.0).round() as u64)
 }
@@ -465,6 +515,10 @@ enum Status {
     NotReached,
     /// Observed but not expected.
     Unexpected,
+    /// Observed strictly after the end of the stream the oracle covers
+    /// (e.g. Guardian events during the collection drain): reported, but not
+    /// verdict-relevant.
+    PostHorizon,
 }
 
 /// One fault-level change: expected by the oracle and/or observed.
@@ -498,7 +552,7 @@ impl TransitionResult {
         match self.status {
             Status::Missing => true,
             Status::Unexpected => !allow_unspecified,
-            Status::Matched | Status::NotReached => false,
+            Status::Matched | Status::NotReached | Status::PostHorizon => false,
         }
     }
 }
@@ -530,6 +584,20 @@ struct OracleSummary {
     missing: usize,
     not_reached: usize,
     unexpected: usize,
+    /// Guardian events strictly after the end of the covered stream.
+    post_horizon: usize,
+}
+
+/// Statistics-only view of the raw `GuardianEvidenceEvent` stream (ADR-007):
+/// counts per detection class/level/state; never feeds the verdict.
+#[derive(Serialize, Default)]
+struct EvidenceStats {
+    events: usize,
+    /// Transitions without a causing sample, hence without `timestamp_ms`
+    /// (ADR-017).
+    without_source_timestamp: usize,
+    /// `"CLASS/LEVEL stage" -> count`, e.g. `"PHYSICAL_TEMP_RATE/WARNING active"`.
+    by_detection: BTreeMap<String, usize>,
 }
 
 #[derive(Serialize)]
@@ -557,6 +625,8 @@ struct Report {
     transitions: Vec<TransitionResult>,
     /// All non-baseline fault events as received.
     fault_events: Vec<TimedFault>,
+    /// Raw detection transitions, counted only (ADR-007 raw evidence stream).
+    evidence: EvidenceStats,
     /// OpenSOVD plane (absent with `--no-sovd`).
     sovd: Option<SovdReport>,
     notes: Vec<String>,
@@ -564,7 +634,11 @@ struct Report {
 
 /// Matches each Guardian `Failed` change to one OpenSOVD activation of its
 /// fault code within `[t - SOVD_EARLY_MS, t + SOVD_SLACK_MS]`.
-fn match_sovd(faults: &[TimedFault], sovd: &SovdTimeline, url: &str) -> (SovdReport, Vec<Option<u64>>) {
+fn match_sovd(
+    faults: &[TimedFault],
+    sovd: &SovdTimeline,
+    url: &str,
+) -> (SovdReport, Vec<Option<u64>>) {
     let mut visible_at = vec![None; faults.len()];
     let mut used = vec![false; sovd.activations.len()];
     let mut not_visible = Vec::new();
@@ -575,7 +649,8 @@ fn match_sovd(faults: &[TimedFault], sovd: &SovdTimeline, url: &str) -> (SovdRep
         let found = sovd.activations.iter().enumerate().position(|(j, a)| {
             !used[j]
                 && a.code == f.event.fault_id
-                && a.t_ms.is_some_and(|ta| ta + SOVD_EARLY_MS >= t && ta <= t + SOVD_SLACK_MS)
+                && a.t_ms
+                    .is_some_and(|ta| ta + SOVD_EARLY_MS >= t && ta <= t + SOVD_SLACK_MS)
         });
         match found {
             Some(j) => {
@@ -618,6 +693,7 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
         faults: all_faults,
         battery_end,
         sovd,
+        evidence,
     } = timeline(messages, case.replay);
     let all_faults: Vec<TimedFault> = all_faults.into_iter().filter(|f| !f.event.baseline).collect();
     let mut notes = Vec::new();
@@ -629,9 +705,41 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
     };
     let stale_at_end = all_faults.iter().filter(|f| end_of_replay(f)).count();
     if stale_at_end > 0 {
-        notes.push(format!("{STALE_FAULT} at the end of the replay ignored ({stale_at_end} change(s))"));
+        notes.push(format!(
+            "{STALE_FAULT} at the end of the replay ignored ({stale_at_end} change(s))"
+        ));
     }
-    let faults = collapse_handovers(all_faults.iter().filter(|f| !end_of_replay(f)).cloned().collect());
+    let faults = collapse_handovers(
+        all_faults
+            .iter()
+            .filter(|f| !end_of_replay(f))
+            .cloned()
+            .collect(),
+    );
+
+    // Fault events strictly after the end of the stream the oracle covers
+    // (`source_window_ms.end`, else the last `source_finished_at_ms` of the
+    // ground truth) typically come from the collection drain after the replay:
+    // reported, but not verdict-relevant. Without any such source the old
+    // fail-closed behaviour stays in place.
+    // Both timeline ends are source times; fault `t_ms` lives on the replay
+    // timeline, so map the bound through the nominal replay mapping before
+    // comparing (upstream `evaluate on the replay timeline` semantics).
+    let stream_end = case
+        .oracle
+        .source_window_ms
+        .map(|w| case.replay.nominal(w.end))
+        .or_else(|| {
+            case.injections
+                .iter()
+                .filter_map(|i| i.source_finished_at_ms.map(|f| case.replay.nominal(f)))
+                .max()
+        });
+    let (faults, post_horizon_faults): (Vec<TimedFault>, Vec<TimedFault>) =
+        faults.into_iter().partition(|f| match f.t_ms {
+            Some(t) => stream_end.is_none_or(|e| t <= e),
+            None => true,
+        });
 
     match battery_end {
         None => {
@@ -639,7 +747,10 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
             verdict = Verdict::Inconclusive;
         }
         Some(end) if end + REPLAY_END_TOLERANCE_MS < case.replay_end_ms => {
-            notes.push(format!("battery stream ended at {end} ms, replay lasts {} ms", case.replay_end_ms));
+            notes.push(format!(
+                "battery stream ended at {end} ms, replay lasts {} ms",
+                case.replay_end_ms
+            ));
             verdict = Verdict::Inconclusive;
         }
         _ => {}
@@ -656,7 +767,10 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
     let sovd_reachable = sovd_report.as_ref().is_some_and(|r| r.polls > 0);
     if let Some(r) = &sovd_report {
         if r.polls == 0 {
-            notes.push(format!("OpenSOVD not reachable at {} ({} failed polls)", r.url, r.errors));
+            notes.push(format!(
+                "OpenSOVD not reachable at {} ({} failed polls)",
+                r.url, r.errors
+            ));
             verdict = verdict.max(Verdict::Inconclusive);
         } else if !r.not_visible.is_empty() {
             notes.push(format!(
@@ -676,7 +790,8 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
             !used[i]
                 && f.event.fault_id == e.fault_id
                 && f.event.stage == e.stage
-                && f.t_ms.is_some_and(|t| e.at_ms <= t && t <= e.at_ms + GUARDIAN_SLACK_MS)
+                && f.t_ms
+                    .is_some_and(|t| e.at_ms <= t && t <= e.at_ms + GUARDIAN_SLACK_MS)
         });
         if let Some(i) = found {
             used[i] = true;
@@ -704,10 +819,16 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
     }
     let unplaced = faults.iter().filter(|f| f.t_ms.is_none()).count();
     if unplaced > 0 {
-        notes.push(format!("{unplaced} fault event(s) without time (before the battery stream)"));
+        notes.push(format!(
+            "{unplaced} fault event(s) without time (before the battery stream)"
+        ));
         verdict = verdict.max(Verdict::Inconclusive);
     }
-    for (i, f) in faults.iter().enumerate().filter(|(i, f)| !used[*i] && f.t_ms.is_some()) {
+    for (i, f) in faults
+        .iter()
+        .enumerate()
+        .filter(|(i, f)| !used[*i] && f.t_ms.is_some())
+    {
         transitions.push(TransitionResult {
             status: Status::Unexpected,
             fault_id: f.event.fault_id.clone(),
@@ -718,7 +839,25 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
             observed_at_ms: f.t_ms,
             signal: f.event.evidence.signal.clone(),
             sovd_visible_at_ms: visible_at[i],
-            sovd_missing: sovd_reachable && f.event.stage == Stage::Failed && visible_at[i].is_none(),
+            sovd_missing: sovd_reachable
+                && f.event.stage == Stage::Failed
+                && visible_at[i].is_none(),
+            injection_id: None,
+        });
+    }
+    // Post-horizon events: in the report, not in the verdict.
+    for f in &post_horizon_faults {
+        transitions.push(TransitionResult {
+            status: Status::PostHorizon,
+            fault_id: f.event.fault_id.clone(),
+            detection_class: f.event.detection_class.clone(),
+            level: f.event.level.clone(),
+            stage: f.event.stage,
+            expected_at_ms: None,
+            observed_at_ms: f.t_ms,
+            signal: f.event.evidence.signal.clone(),
+            sovd_visible_at_ms: None,
+            sovd_missing: false,
             injection_id: None,
         });
     }
@@ -741,6 +880,24 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
 
     let allow = case.oracle.allow_unspecified;
     let count = |s: Status| transitions.iter().filter(|t| t.status == s).count();
+    // Raw evidence stream: statistics only, never part of the verdict.
+    let mut evidence_stats = EvidenceStats::default();
+    for e in &evidence {
+        evidence_stats.events += 1;
+        *evidence_stats
+            .by_detection
+            .entry(format!("{}/{}/{}", e.detection_class, e.level, e.stage))
+            .or_default() += 1;
+        if e.timestamp_ms.is_none() {
+            evidence_stats.without_source_timestamp += 1;
+        }
+    }
+    if evidence_stats.without_source_timestamp > 0 {
+        notes.push(format!(
+            "{} raw evidence event(s) without source timestamp",
+            evidence_stats.without_source_timestamp
+        ));
+    }
     let summary = OracleSummary {
         file: case.oracle_file.to_owned(),
         allow_unspecified: allow,
@@ -750,21 +907,40 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
         missing: count(Status::Missing),
         not_reached: count(Status::NotReached),
         unexpected: count(Status::Unexpected),
+        post_horizon: count(Status::PostHorizon),
     };
     if summary.missing > 0 {
-        notes.push(format!("{} expected Guardian change(s) missing", summary.missing));
+        notes.push(format!(
+            "{} expected Guardian change(s) missing",
+            summary.missing
+        ));
         verdict = Verdict::Fail;
     }
     if summary.unexpected > 0 {
         if allow {
-            notes.push(format!("{} unexpected Guardian change(s), allowed by the oracle", summary.unexpected));
+            notes.push(format!(
+                "{} unexpected Guardian change(s), allowed by the oracle",
+                summary.unexpected
+            ));
         } else {
-            notes.push(format!("{} unexpected Guardian change(s)", summary.unexpected));
+            notes.push(format!(
+                "{} unexpected Guardian change(s)",
+                summary.unexpected
+            ));
             verdict = Verdict::Fail;
         }
     }
+    if summary.post_horizon > 0 {
+        notes.push(format!(
+            "{} post-horizon Guardian event(s) after stream end (reported, not verdict-relevant)",
+            summary.post_horizon
+        ));
+    }
     if summary.not_reached > 0 {
-        notes.push(format!("{} expected change(s) after the end of the battery stream", summary.not_reached));
+        notes.push(format!(
+            "{} expected change(s) after the end of the battery stream",
+            summary.not_reached
+        ));
         verdict = verdict.max(Verdict::Inconclusive);
     }
 
@@ -809,6 +985,7 @@ fn evaluate(case: &Case, messages: &[Message]) -> Report {
         injections,
         transitions,
         fault_events: all_faults,
+        evidence: evidence_stats,
         sovd: sovd_report,
         notes,
     }
@@ -819,6 +996,7 @@ struct Args {
     oracle: Option<String>,
     report: Option<String>,
     fault_topic: String,
+    evidence_topic: String,
     battery_topic: String,
     idle_timeout: Duration,
     sovd_url: Option<String>,
@@ -828,32 +1006,37 @@ struct Args {
     /// Guardian model YAML used to derive the static bands.
     #[cfg(feature = "observer")]
     guardian_model: Option<String>,
+    /// Optional path written with the frozen observer state as standalone HTML.
+    #[cfg(feature = "observer")]
+    observer_dump: Option<String>,
 }
 
 #[cfg(feature = "observer")]
 const USAGE: &str = "usage: evidence_collector <prefix> [--oracle FILE] [--report FILE] \
-[--fault-topic URI] [--battery-topic URI] [--idle-timeout SECS] [--observer] \
-[--observer-addr ADDR] [--guardian-model FILE] [--sovd-url URL | --no-sovd]";
+[--fault-topic URI] [--evidence-topic URI] [--battery-topic URI] [--idle-timeout SECS] [--observer] \
+[--observer-addr ADDR] [--guardian-model FILE] [--dump-html FILE] [--sovd-url URL | --no-sovd]";
 #[cfg(not(feature = "observer"))]
 const USAGE: &str = "usage: evidence_collector <prefix> [--oracle FILE] [--report FILE] \
-[--fault-topic URI] [--battery-topic URI] [--idle-timeout SECS] [--sovd-url URL | --no-sovd]";
+[--fault-topic URI] [--evidence-topic URI] [--battery-topic URI] [--idle-timeout SECS] [--sovd-url URL | --no-sovd]";
 
 fn parse_args() -> Result<Args> {
     let mut it = std::env::args().skip(1);
     let mut prefix = None;
     let (mut oracle, mut report) = (None, None);
     let mut fault_topic = uprotocol::DEFAULT_FAULT_TOPIC.to_owned();
+    let mut evidence_topic = uprotocol::DEFAULT_EVIDENCE_TOPIC.to_owned();
     let mut battery_topic = uprotocol::DEFAULT_BATTERY_TOPIC.to_owned();
     let mut idle_timeout = Duration::from_secs(3);
     let mut sovd_url = Some(sovd::DEFAULT_URL.to_owned());
     #[cfg(feature = "observer")]
-    let (mut observer, mut guardian_model) = (None, None);
+    let (mut observer, mut guardian_model, mut observer_dump) = (None, None, None);
     while let Some(arg) = it.next() {
         let mut value = || it.next().with_context(|| format!("{arg} needs a value"));
         match arg.as_str() {
             "--oracle" => oracle = Some(value()?),
             "--report" => report = Some(value()?),
             "--fault-topic" => fault_topic = value()?,
+            "--evidence-topic" => evidence_topic = value()?,
             "--battery-topic" => battery_topic = value()?,
             "--sovd-url" => sovd_url = Some(value()?),
             "--no-sovd" => sovd_url = None,
@@ -866,6 +1049,8 @@ fn parse_args() -> Result<Args> {
             "--observer-addr" => observer = Some(value()?),
             #[cfg(feature = "observer")]
             "--guardian-model" => guardian_model = Some(value()?),
+            #[cfg(feature = "observer")]
+            "--dump-html" => observer_dump = Some(value()?),
             "-h" | "--help" => bail!(USAGE),
             _ if prefix.is_none() => prefix = Some(arg),
             _ => bail!("unexpected argument: {arg}\n{USAGE}"),
@@ -876,6 +1061,7 @@ fn parse_args() -> Result<Args> {
         oracle,
         report,
         fault_topic,
+        evidence_topic,
         battery_topic,
         idle_timeout,
         sovd_url,
@@ -883,12 +1069,19 @@ fn parse_args() -> Result<Args> {
         observer,
         #[cfg(feature = "observer")]
         guardian_model,
+        #[cfg(feature = "observer")]
+        observer_dump,
     })
 }
 
 fn print_report(report: &Report) {
-    let end = report.battery_end_ms.map_or("-".into(), |e| format!("{e} ms"));
-    println!("{}: {:?} (battery timeline up to {end}, replay {} ms)", report.case, report.verdict, report.replay_end_ms);
+    let end = report
+        .battery_end_ms
+        .map_or("-".into(), |e| format!("{e} ms"));
+    println!(
+        "{}: {:?} (battery timeline up to {end}, replay {} ms)",
+        report.case, report.verdict, report.replay_end_ms
+    );
     let o = &report.oracle;
     println!(
         "  oracle: {} expected change(s): {} matched, {} missing, {} not reached; {} unexpected{}; \
@@ -912,7 +1105,11 @@ fn print_report(report: &Report) {
             r.expected,
             r.missing,
             r.unexpected,
-            if r.sovd_missing > 0 { format!(", {} not in OpenSOVD", r.sovd_missing) } else { String::new() }
+            if r.sovd_missing > 0 {
+                format!(", {} not in OpenSOVD", r.sovd_missing)
+            } else {
+                String::new()
+            }
         );
     }
     println!("  changes (expected / observed):");
@@ -923,10 +1120,13 @@ fn print_report(report: &Report) {
             Status::Missing => "MISSING",
             Status::NotReached => "not reached",
             Status::Unexpected => "UNEXPECTED",
+            Status::PostHorizon => "POST-HORIZON",
         };
         let sovd = match (&report.sovd, t.stage, t.sovd_visible_at_ms) {
             (Some(_), Stage::Failed, Some(at)) => format!("OpenSOVD {at} ms"),
-            (Some(_), Stage::Failed, None) if t.status != Status::Missing => "<- not in OpenSOVD".into(),
+            (Some(_), Stage::Failed, None) if t.status != Status::Missing => {
+                "<- not in OpenSOVD".into()
+            }
             _ => String::new(),
         };
         println!(
@@ -939,6 +1139,17 @@ fn print_report(report: &Report) {
             t.signal.as_deref().unwrap_or("-"),
             sovd
         );
+    }
+    let evidence = &report.evidence;
+    if evidence.events > 0 {
+        print!(
+            "  raw evidence: {} transition(s), {} without source timestamp:",
+            evidence.events, evidence.without_source_timestamp
+        );
+        for (detection, count) in &evidence.by_detection {
+            print!(" {detection}={count}");
+        }
+        println!();
     }
     if let Some(r) = &report.sovd {
         println!(
@@ -958,17 +1169,24 @@ fn print_report(report: &Report) {
 async fn run() -> Result<Verdict> {
     let args = parse_args()?;
 
-    let oracle_file = args.oracle.clone().unwrap_or_else(|| format!("{}.oracle.yaml", args.prefix));
-    let oracle = oracle::parse(&fs::read_to_string(&oracle_file).with_context(|| format!("reading {oracle_file}"))?)
-        .with_context(|| format!("parsing {oracle_file}"))?;
+    let oracle_file = args
+        .oracle
+        .clone()
+        .unwrap_or_else(|| format!("{}.oracle.yaml", args.prefix));
+    let oracle = oracle::parse(
+        &fs::read_to_string(&oracle_file).with_context(|| format!("reading {oracle_file}"))?,
+    )
+    .with_context(|| format!("parsing {oracle_file}"))?;
 
     let candidates = [
         format!("{}.ground_truth.yaml", args.prefix),
         format!("{}.json", args.prefix),
     ];
     let injections = match candidates.iter().find(|p| std::path::Path::new(p).exists()) {
-        Some(file) => parse_ground_truth(&fs::read_to_string(file).with_context(|| format!("reading {file}"))?)
-            .with_context(|| format!("parsing {file}"))?,
+        Some(file) => parse_ground_truth(
+            &fs::read_to_string(file).with_context(|| format!("reading {file}"))?,
+        )
+        .with_context(|| format!("parsing {file}"))?,
         None => Vec::new(),
     };
 
@@ -989,7 +1207,7 @@ async fn run() -> Result<Verdict> {
     #[cfg(not(feature = "observer"))]
     let sink: uprotocol::Sink = None;
 
-    let topics = [&args.fault_topic, &args.battery_topic]
+    let topics = [&args.fault_topic, &args.evidence_topic, &args.battery_topic]
         .into_iter()
         .map(|t| UUri::from_str(t).with_context(|| format!("invalid topic {t}")))
         .collect::<Result<Vec<_>>>()?;
@@ -1029,6 +1247,17 @@ async fn run() -> Result<Verdict> {
     fs::write(&path, serde_json::to_string_pretty(&report)?)
         .with_context(|| format!("writing {}", path.display()))?;
     println!("  report: {}", path.display());
+
+    // ADR-018: the frozen observer state is written as one self-contained HTML
+    // document for the Evidence Reporter to link.
+    #[cfg(feature = "observer")]
+    if let (Some(dump), Some(handle)) = (&args.observer_dump, &observer) {
+        match handle.dump_html(std::path::Path::new(dump)) {
+            Ok(()) => println!("  observer html: {dump}"),
+            Err(e) => eprintln!("observer: cannot write {dump}: {e}"),
+        }
+    }
+
     Ok(report.verdict)
 }
 
@@ -1087,7 +1316,9 @@ fn load_bands(path: Option<&str>) -> Option<observer::Bands> {
 /// Absent for baseline cases.
 #[cfg(feature = "observer")]
 fn load_oracle(oracle: &Option<String>, prefix: &str) -> Option<serde_json::Value> {
-    let path = oracle.clone().unwrap_or_else(|| format!("{prefix}.oracle.yaml"));
+    let path = oracle
+        .clone()
+        .unwrap_or_else(|| format!("{prefix}.oracle.yaml"));
     let src = fs::read_to_string(&path).ok()?;
     let value: serde_yaml::Value = serde_yaml::from_str(&src).ok()?;
     serde_json::to_value(value).ok()
@@ -1138,6 +1369,7 @@ mod tests {
     fn copy(m: &Message) -> Message {
         match m {
             Message::Fault(f) => Message::Fault(f.clone()),
+            Message::Evidence(e) => Message::Evidence(e.clone()),
             Message::Battery(b) => Message::Battery(b.clone()),
             Message::Sovd(s, at) => Message::Sovd(s.clone(), *at),
         }
@@ -1150,7 +1382,12 @@ mod tests {
         let mut out = Vec::new();
         for t in (first..=END).step_by(100) {
             out.push(battery(offset + t));
-            out.extend(extra.iter().filter(|(at, _)| *at == t).map(|(_, m)| copy(m)));
+            out.extend(
+                extra
+                    .iter()
+                    .filter(|(at, _)| *at == t)
+                    .map(|(_, m)| copy(m)),
+            );
         }
         out
     }
@@ -1168,13 +1405,27 @@ guardian:
     - { at_ms: 1500, class: PHYSICAL_TEMP_ABSOLUTE_LIMIT, level: VIOLATION, state: cleared, signal: temp_min }
     - { at_ms: 1000, class: PHYSICAL_TEMP_RATE, level: WARNING, state: active, signal: temp_min }
 ";
+    /// Injection window ending with the replay: without a
+    /// `source_window_ms`, the last record finish doubles as the fallback
+    /// stream end, so events up to `END` stay in the window.
     const GROUND_TRUTH: &str = "
 - injection_id: oor-1
   injected_class: signal.out_of_range
   source_started_at_ms: 1000
-  source_finished_at_ms: 1500
+  source_finished_at_ms: 19900
 ";
     const LIMIT: &str = "PHYSICAL_TEMP_ABSOLUTE_LIMIT";
+    /// Oracle without transitions and without a source window.
+    const EMPTY_ORACLE: &str = "guardian:\n  allow_unspecified: false\n  transitions: []\n";
+    /// Oracle whose covered stream ends at 19_000 ms: Guardian events strictly
+    /// after that are post-horizon.
+    const WINDOWED_ORACLE: &str = "schema_version: 1
+source_window_ms: { start: 0, end: 19000 }
+
+guardian:
+  allow_unspecified: false
+  transitions: []
+";
 
     fn limit_ok() -> Vec<(u64, Message)> {
         vec![
@@ -1205,7 +1456,10 @@ guardian:
     }
 
     fn statuses(r: &Report) -> Vec<(Option<u64>, Status)> {
-        r.transitions.iter().map(|t| (t.expected_at_ms, t.status)).collect()
+        r.transitions
+            .iter()
+            .map(|t| (t.expected_at_ms, t.status))
+            .collect()
     }
 
     #[test]
@@ -1247,15 +1501,134 @@ guardian:
         assert_eq!(r.oracle.unexpected, 1);
         assert_eq!(r.injections[0].unexpected, 1); // inside its slot (open end)
         let allowed = ORACLE.replace("allow_unspecified: false", "allow_unspecified: true");
-        assert_eq!(check_with(&allowed, None, &stream(&extra)).verdict, Verdict::Pass);
+        assert_eq!(
+            check_with(&allowed, None, &stream(&extra)).verdict,
+            Verdict::Pass
+        );
     }
 
     #[test]
     fn empty_oracle_is_a_baseline() {
-        let empty = "guardian:\n  allow_unspecified: false\n  transitions: []\n";
-        assert_eq!(check_with(empty, None, &stream(&[])).verdict, Verdict::Pass);
-        let r = check_with(empty, None, &stream(&[(500, fault(LIMIT, Stage::Failed, Some(500)))]));
+        assert_eq!(
+            check_with(EMPTY_ORACLE, None, &stream(&[])).verdict,
+            Verdict::Pass
+        );
+        let r = check_with(
+            EMPTY_ORACLE,
+            None,
+            &stream(&[(500, fault(LIMIT, Stage::Failed, Some(500)))]),
+        );
         assert_eq!(r.verdict, Verdict::Fail);
+    }
+
+    /// Identity replay fixture: source time == replay time (nominal template).
+    fn identity_replay() -> Replay {
+        let mut asc = String::from("date Wed Oct 07 2026\n");
+        for s in (0..=20000).step_by(100) {
+            asc += &frame(s, s);
+            asc.push('\n');
+        }
+        Replay::parse(&asc)
+    }
+
+    /// Regression with a windowed oracle: everything up to (and at) the
+    /// window end is judged as before, unexpected in-window changes fail.
+    #[test]
+    fn unexpected_in_window_fails() {
+        let r = check_with(WINDOWED_ORACLE, None, &stream(&limit_ok()));
+        assert_eq!(r.verdict, Verdict::Fail);
+        assert_eq!(r.oracle.unexpected, 2);
+        assert_eq!(r.oracle.post_horizon, 0);
+    }
+
+    /// Stream end from the oracle: Guardian events strictly after
+    /// `source_window_ms.end` are post-horizon (reported, not
+    /// verdict-relevant); an event at exactly the end stays in the window.
+    #[test]
+    fn post_horizon_after_the_window_is_not_verdict_relevant() {
+        let r = check_with(
+            WINDOWED_ORACLE,
+            None,
+            &stream(&[(19500, fault("SIGNAL_STUCK", Stage::Failed, Some(19500)))]),
+        );
+        assert_eq!(r.verdict, Verdict::Pass, "{:?}", r.notes);
+        assert_eq!(r.oracle.unexpected, 0);
+        assert_eq!(r.oracle.post_horizon, 1);
+        let t = r
+            .transitions
+            .iter()
+            .find(|t| t.status == Status::PostHorizon)
+            .unwrap();
+        assert_eq!(t.observed_at_ms, Some(19500));
+        assert!(r.notes.iter().any(|n| n == "1 post-horizon Guardian event(s) after stream end (reported, not verdict-relevant)"));
+        // The end edge itself belongs to the window.
+        let edge = check_with(
+            WINDOWED_ORACLE,
+            None,
+            &stream(&[(19000, fault("SIGNAL_STUCK", Stage::Failed, Some(19000)))]),
+        );
+        assert_eq!(edge.verdict, Verdict::Fail);
+        assert_eq!(edge.oracle.unexpected, 1);
+    }
+
+    /// Fallback: without an oracle window, the last ground-truth finish marks
+    /// the stream end.
+    #[test]
+    fn ground_truth_finish_is_the_fallback_stream_end() {
+        let gt = "- injection_id: a
+  injected_class: signal.out_of_range
+  source_started_at_ms: 1000
+  source_finished_at_ms: 19000
+";
+        let m = stream(&[(19500, fault("SIGNAL_STUCK", Stage::Failed, Some(19500)))]);
+        let oracle = oracle::parse(EMPTY_ORACLE).unwrap();
+        let injections = parse_ground_truth(gt).unwrap();
+        let replay = identity_replay();
+        let r = evaluate(
+            &Case {
+                name: "t",
+                oracle_file: "o",
+                oracle: &oracle,
+                injections: &injections,
+                replay: &replay,
+replay_end_ms: END,
+                sovd_url: None,
+            },
+            &m,
+        );
+        assert_eq!(r.verdict, Verdict::Pass, "{:?}", r.notes);
+        assert_eq!(r.oracle.post_horizon, 1);
+    }
+
+    /// Without any stream-end source (no oracle window, no ground-truth
+    /// finish) nothing changes: fail-closed, as before.
+    #[test]
+    fn without_a_stream_end_source_the_old_behaviour_stays() {
+        let gt = "- injection_id: a
+  injected_class: signal.out_of_range
+  started_at: 1000
+  duration_ms: 500
+";
+        let m = stream(&[(19500, fault("SIGNAL_STUCK", Stage::Failed, Some(19500)))]);
+        let oracle = oracle::parse(EMPTY_ORACLE).unwrap();
+        let injections = parse_ground_truth(gt).unwrap();
+        assert!(injections[0].source_finished_at_ms.is_none());
+        let replay = identity_replay();
+        let r = evaluate(
+            &Case {
+                name: "t",
+                oracle_file: "o",
+                oracle: &oracle,
+                injections: &injections,
+                replay: &replay,
+replay_end_ms: END,
+                sovd_url: None,
+            },
+            &m,
+        );
+        assert_eq!(r.verdict, Verdict::Fail);
+        assert_eq!(r.oracle.unexpected, 1);
+        assert_eq!(r.oracle.post_horizon, 0);
     }
 
     #[test]
@@ -1288,10 +1661,14 @@ guardian:
 
     #[test]
     fn source_time_is_not_rebased_when_first_frames_are_lost() {
-        let m = stream_from(300, 0, &[
-            (1000, fault(LIMIT, Stage::Failed, None)),
-            (1500, fault(LIMIT, Stage::Passed, None)),
-        ]);
+        let m = stream_from(
+            300,
+            0,
+            &[
+                (1000, fault(LIMIT, Stage::Failed, None)),
+                (1500, fault(LIMIT, Stage::Passed, None)),
+            ],
+        );
         let r = check(&m);
         assert_eq!(r.verdict, Verdict::Pass);
         assert_eq!(r.transitions[0].observed_at_ms, Some(1000));
@@ -1300,10 +1677,14 @@ guardian:
     #[test]
     fn wall_clock_timestamps_are_rebased() {
         let epoch = 1_791_300_000_000;
-        let m = stream_from(0, epoch, &[
-            (1000, fault(LIMIT, Stage::Failed, Some(epoch + 1000))),
-            (1500, fault(LIMIT, Stage::Passed, None)),
-        ]);
+        let m = stream_from(
+            0,
+            epoch,
+            &[
+                (1000, fault(LIMIT, Stage::Failed, Some(epoch + 1000))),
+                (1500, fault(LIMIT, Stage::Passed, None)),
+            ],
+        );
         let r = check(&m);
         assert_eq!(r.verdict, Verdict::Pass, "{:?}", r.notes);
         assert_eq!(r.battery_end_ms, Some(END));
@@ -1327,14 +1708,17 @@ guardian:
     #[test]
     fn baseline_events_are_ignored() {
         let mut m = stream(&limit_ok());
-        m.insert(0, Message::Fault(FaultEvent {
-            fault_id: "BatteryTempStreamStale".into(),
-            detection_class: "STREAM_STALE".into(),
-            level: "VIOLATION".into(),
-            stage: Stage::Passed,
-            baseline: true,
-            evidence: FaultEvidence::default(),
-        }));
+        m.insert(
+            0,
+            Message::Fault(FaultEvent {
+                fault_id: "BatteryTempStreamStale".into(),
+                detection_class: "STREAM_STALE".into(),
+                level: "VIOLATION".into(),
+                stage: Stage::Passed,
+                baseline: true,
+                evidence: FaultEvidence::default(),
+            }),
+        );
         assert_eq!(check(&m).verdict, Verdict::Pass);
     }
 
@@ -1369,7 +1753,10 @@ guardian:
         Message::Sovd(
             Some(sovd::Snapshot::from([(
                 code.to_owned(),
-                sovd::FaultState { active, occurrences },
+                sovd::FaultState {
+                    active,
+                    occurrences,
+                },
             )])),
             None,
         )
@@ -1385,14 +1772,21 @@ guardian:
 
     #[test]
     fn sovd_visible_within_slack_passes() {
-        let r = check_with(ORACLE, Some("http://sovd"), &with_sovd(vec![(1300, sovd("BatteryTempAbsoluteLimit", true, 1))]));
+        let r = check_with(
+            ORACLE,
+            Some("http://sovd"),
+            &with_sovd(vec![(1300, sovd("BatteryTempAbsoluteLimit", true, 1))]),
+        );
         assert_eq!(r.verdict, Verdict::Pass, "{:?}", r.notes);
         assert_eq!(r.transitions[0].sovd_visible_at_ms, Some(1300));
     }
 
     #[test]
     fn sovd_too_late_or_missing_fails() {
-        for extra in [vec![(1600, sovd("BatteryTempAbsoluteLimit", true, 1))], vec![]] {
+        for extra in [
+            vec![(1600, sovd("BatteryTempAbsoluteLimit", true, 1))],
+            vec![],
+        ] {
             let r = check_with(ORACLE, Some("http://sovd"), &with_sovd(extra));
             assert_eq!(r.verdict, Verdict::Fail);
             assert_eq!(r.injections[0].sovd_missing, 1);
@@ -1402,7 +1796,11 @@ guardian:
 
     #[test]
     fn sovd_short_fault_counted_by_occurrence_counter() {
-        let r = check_with(ORACLE, Some("http://sovd"), &with_sovd(vec![(1100, sovd("BatteryTempAbsoluteLimit", false, 1))]));
+        let r = check_with(
+            ORACLE,
+            Some("http://sovd"),
+            &with_sovd(vec![(1100, sovd("BatteryTempAbsoluteLimit", false, 1))]),
+        );
         assert_eq!(r.verdict, Verdict::Pass);
     }
 
@@ -1419,13 +1817,23 @@ guardian:
         let at = |ms: u64| Some(base + Duration::from_millis(ms));
         let mut m = vec![sovd("BatteryTempStreamStale", false, 0)];
         for t in (0..=7900).step_by(100) {
-            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t), ..Default::default() }));
+            m.push(Message::Battery(BatteryEvent {
+                timestamp_ms: t,
+                received: at(t),
+                ..Default::default()
+            }));
         }
         m.push(fault("STREAM_STALE", Stage::Failed, Some(8500)));
-        let Message::Sovd(snapshot, _) = sovd("BatteryTempStreamStale", true, 1) else { unreachable!() };
+        let Message::Sovd(snapshot, _) = sovd("BatteryTempStreamStale", true, 1) else {
+            unreachable!()
+        };
         m.push(Message::Sovd(snapshot, at(8550)));
         for t in (8600..=END).step_by(100) {
-            m.push(Message::Battery(BatteryEvent { timestamp_ms: t, received: at(t), ..Default::default() }));
+            m.push(Message::Battery(BatteryEvent {
+                timestamp_ms: t,
+                received: at(t),
+                ..Default::default()
+            }));
         }
         let r = check_with(stale_oracle, Some("http://sovd"), &m);
         assert_eq!(r.transitions[0].sovd_visible_at_ms, Some(8550));
@@ -1453,17 +1861,65 @@ guardian:
     }
 
     #[test]
+    fn decodes_guardian_evidence_payload_and_counts_stats() {
+        // A mapped active transition with evidence data and timestamp...
+        let active =
+            br#"{"run_id":"run-7","detection_class":"PHYSICAL_TEMP_RATE","level":"WARNING",
+            "stage":"active","signal":"temp_min","evidence":{"observed":3.5},"timestamp_ms":1200}"#;
+        let Message::Evidence(active_event) = decode_message(active).unwrap() else {
+            panic!("not an evidence event");
+        };
+        assert_eq!(
+            (active_event.run_id.as_str(), active_event.stage.as_str()),
+            ("run-7", "active")
+        );
+        assert_eq!(
+            (active_event.level.as_str(), active_event.signal.as_deref()),
+            ("WARNING", Some("temp_min"))
+        );
+        assert_eq!(active_event.timestamp_ms, Some(1200));
+        // ...and an unmapped cleared transition without any causing sample.
+        let cleared = br#"{"run_id":"run-7","detection_class":"STREAM_STALE","level":"VIOLATION","stage":"cleared"}"#;
+        let Message::Evidence(cleared_event) = decode_message(cleared).unwrap() else {
+            panic!("not an evidence event");
+        };
+        assert_eq!(cleared_event.timestamp_ms, None);
+        assert_eq!(cleared_event.stage, "cleared");
+
+        // Raw events are collected for statistics, not judged.
+        let replay = identity_replay();
+        let timeline = timeline(
+            &[
+                Message::Evidence(active_event.clone()),
+                battery(100),
+                Message::Evidence(cleared_event.clone()),
+            ],
+            &replay,
+        );
+        assert!(timeline.faults.is_empty());
+        assert_eq!(timeline.evidence.len(), 2);
+    }
+
+    #[test]
     fn decodes_guardian_and_battery_payloads() {
         let fault = br#"{"fault_id":"BatteryTempRate","detection_class":"PHYSICAL_TEMP_RATE",
             "level":"VIOLATION","stage":"Failed","baseline":false,"sovd_path":"battery_guardian",
             "source":{"entity":"BatteryThermalGuardian"},"evidence":{"signal":"temp_max","timestamp_ms":1200}}"#;
-        let Message::Fault(f) = decode_message(fault).unwrap() else { panic!("not a fault") };
-        assert_eq!((f.stage, f.evidence.timestamp_ms), (Stage::Failed, Some(1200)));
+        let Message::Fault(f) = decode_message(fault).unwrap() else {
+            panic!("not a fault")
+        };
+        assert_eq!(
+            (f.stage, f.evidence.timestamp_ms),
+            (Stage::Failed, Some(1200))
+        );
         let baseline = br#"{"fault_id":"BatteryTempRate","detection_class":"PHYSICAL_TEMP_RATE",
             "level":"VIOLATION","stage":"Passed","baseline":true,"evidence":{}}"#;
         assert!(matches!(decode_message(baseline).unwrap(), Message::Fault(f) if f.baseline));
-        let battery = br#"{"temp_max":32.5,"temp_avg":30.5,"temp_min":25.5,"soc":67.0,"timestamp_ms":1200}"#;
-        assert!(matches!(decode_message(battery).unwrap(), Message::Battery(b) if b.timestamp_ms == 1200));
+        let battery =
+            br#"{"temp_max":32.5,"temp_avg":30.5,"temp_min":25.5,"soc":67.0,"timestamp_ms":1200}"#;
+        assert!(
+            matches!(decode_message(battery).unwrap(), Message::Battery(b) if b.timestamp_ms == 1200)
+        );
     }
 
     /// Frame line as the case mutator writes it (CAN FD, TimeStamp LE).

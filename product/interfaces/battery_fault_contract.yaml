@@ -9,28 +9,29 @@ canonical_artifacts:
   guardian_diagnostics: ../config/battery_guardian/guardian_diagnostics.json
   fault_injection_model: ../config/battery_guardian/fault_injection_model.yaml
 
-# Observation emitted for a Guardian detection state transition. The concrete
-# detection_class and detection_level values come from the Guardian enums.
-# fault_id is present only when the pair has a configured DFM projection.
+# Raw Guardian detection transition published over uProtocol (ADR-007): the
+# raw decision stream carries EVERY internal detection transition, mapped or
+# not, published before and independently of the DFM projection. JSON payload
+# on //guardian-vss/9000/1/9003 (shared guardian-vss entity 9000, RID 9003);
+# run_id comes from the Guardian startup configuration (GUARDIAN_RUN_ID).
 guardian_evidence_event:
+  uri: //guardian-vss/9000/1/9003
+  payload_format: UPAYLOAD_FORMAT_JSON
   required:
     - run_id
-    - detection_class
-    - detection_level
-    - state
-    - detected_at_ms
+    - detection_class # DetectionClass enum, e.g. PHYSICAL_TEMP_RATE
+    - level           # DetectionLevel enum, e.g. WARNING
+    - stage           # active | cleared (detection state, not fault level)
   optional:
-    - fault_id
-  context:
-    - temp_min
-    - temp_avg
-    - temp_max
-    - soc
-    - signal
-    - observed
-    - limit
-    - residual
-    - utilization
+    - signal          # canonical signal of the transition, if one exists
+    - evidence        # observed, limit, residual, utilization, interval_ms;
+                      # absent fields are omitted from the payload
+    - timestamp_ms    # source timestamp of the causing sample (ADR-017);
+                      # the field is omitted when no causing sample exists.
+                      # STREAM_STALE is anchored to the staleness deadline of
+                      # the last sample: last source time plus the receive age
+                      # rounded up to evaluation periods (ADR-013), because the
+                      # oracle keys staleness to that deadline, not to a sample.
 
 # Fault-level change published by the Guardian over uProtocol (ADR-007).
 # Mirrors every Failed/Passed change reported to the DFM; JSON payload on
@@ -54,7 +55,14 @@ guardian_fault_event:
     - residual
     - utilization
     - interval_ms      # source/generation interval Δτ of a temporal check
-    - timestamp_ms     # source timestamp of the causing sample (ADR-013)
+                       # (stays optional)
+  # timestamp_ms is a REQUIRED field of the fault event, not an optional
+  # evidence entry: required in FaultEvidence whenever a causing sample
+  # exists (ADR-017). Baseline/all-clear events carry no timestamp_ms.
+  # STREAM_STALE carries its projected staleness deadline (last source time
+  # plus receive age rounded up to evaluation periods, ADR-013).
+  evidence_timestamp_required:
+    - timestamp_ms     # source-relative timestamp of the causing sample
 
 # Authoritative injection-side record emitted by the campaign/Fault Generator.
 # injected_class and mutations are copied from the executed injection instance
