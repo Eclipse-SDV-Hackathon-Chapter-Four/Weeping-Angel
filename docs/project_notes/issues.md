@@ -26,3 +26,8 @@ is not authoritative) — they do not become open issues here.
 - **Status**: Resolved
 - **Description**: Split model parameters, the existing DFM catalog, and injection ground truth into canonical artifacts under `product/config/battery_guardian`.
 - **Notes**: Added `signal.combination`, a strict injection-model validator, and 10 validator tests; retained the existing DFM reporter. Dev-container `make check` passes all 27 Rust tests and the configuration checks.
+
+### 2026-10-07 - Add orthogonal Guardian detection levels
+- **Status**: Resolved
+- **Description**: Added `Warning`, `Violation`, and `Critical` levels orthogonal to detection classes; thermal state now uses one `THERMAL_LIMIT` class and continuous model bounds produce utilization warnings.
+- **Notes**: Thermal DFM IDs and existing physical-violation IDs remain unchanged. Spread/hotspot/rate warnings remain internal observations without new DFM entries; boundary, transition, catalog, and projection tests pass in the 37-test dev-container suite.

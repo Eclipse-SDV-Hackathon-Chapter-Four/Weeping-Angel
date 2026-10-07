@@ -3,103 +3,106 @@
 | File | Defines |
 |---|---|
 | `guardian_model.yaml` | Guardian physical-model parameters |
-| `guardian_diagnostics.json` | Guardian detection to DFM diagnostic mapping |
+| `guardian_diagnostics.json` | Configured Guardian-to-DFM projection |
 | `fault_injection_model.yaml` | Fault-generator mutation ground truth |
 
-- `guardian_model.yaml` answers: **What is admissible?** It contains only
-  numerical parameters consumed by the Guardian model.
-- `guardian_diagnostics.json` answers: **How is a detected violation
-  reported?** It is the catalog consumed by the existing DFM reporter.
-- `fault_injection_model.yaml` answers: **What fault is deliberately
-  injected?** It belongs to the Fault Generator/Mutator and is not read by the
-  Guardian.
+The files answer three separate questions: what observations are admissible,
+how selected detections are represented diagnostically, and what fault was
+deliberately injected. The Guardian never infers the injected class.
+
+## Detection semantics
+
+A Guardian observation is the orthogonal pair:
 
 ```text
-                    guardian_model.yaml
-                           |
-                           | parameters
-                           v
-CAN/VSS -----------> +-----------+
-sensor values        | Guardian  |
-                     |   model   |
-                     +-----------+
-                           |
-                           | DetectionClass
-                           v
-                 +-------------------+
-                 | existing DFM      |
-                 | reporter          |
-                 +-------------------+
-                           |
-                           | mapping
-                           v
-                 guardian_diagnostics.json
-
-
-fault_injection_model.yaml
-           |
-           | injection specification
-           v
-   +-----------------+
-   | Fault Generator |
-   | / Mutator       |
-   +-----------------+
-           |
-           | mutated CAN / transport / source
-           v
-        system
+Guardian observation = DetectionClass × DetectionLevel
 ```
 
-```text
-               injection ground truth
-Fault Generator -----------------------------+
-                                              |
-                                              v
-                                       +--------------+
-Guardian -------- DetectionClass ----------> | Evidence |
-DFM/OpenSOVD ------------------------------> | Collector|
-                                       +--------------+
-```
+`DetectionClass` identifies which model rule reacted. `DetectionLevel`
+identifies whether that observation is a `WARNING`, `VIOLATION`, or
+`CRITICAL`.
 
-## Diagnostic mapping
+`THERMAL_LIMIT` uses the maximum temperature. The critical threshold is the
+configured `absolute_max_c`; the warning threshold is derived as
+`absolute_max_c - warning_margin_c`:
 
-This is a Guardian detection to DFM fault mapping, not an injected-fault to
-DFM-fault mapping.
-
-| Guardian `DetectionClass` | DFM fault |
+| Observation | Meaning |
 |---|---|
-| `STREAM_STALE` | `BatteryTempStreamStale` |
-| `PHYSICAL_TEMP_ABSOLUTE_LIMIT` | `BatteryTempAbsoluteLimit` |
-| `PHYSICAL_TEMP_ORDERING` | `BatteryTempOrdering` |
-| `PHYSICAL_TEMP_SPREAD` | `BatteryTempSpread` |
-| `PHYSICAL_TEMP_HOTSPOT` | `BatteryTempHotspot` |
-| `PHYSICAL_TEMP_RATE` | `BatteryTempRate` |
-| `PHYSICAL_SOC_RANGE` | `BatterySocRange` |
-| `PHYSICAL_SOC_RATE` | `BatterySocRate` |
-| `SIGNAL_STUCK` | `BatterySignalStuck` |
+| `THERMAL_LIMIT / WARNING` | Maximum temperature entered the warning band |
+| `THERMAL_LIMIT / CRITICAL` | Maximum temperature reached or exceeded the absolute-maximum threshold |
+
+The levels are mutually exclusive. At exactly 70 °C, `THERMAL_LIMIT /
+CRITICAL` is active without `PHYSICAL_TEMP_ABSOLUTE_LIMIT`; above 70 °C both
+the critical thermal observation and the independent absolute-limit
+`VIOLATION` are active.
+
+Spread, hotspot, and temperature-rate checks use
+`utilization = observed / limit`. Below `warning.utilization_threshold` they
+produce no detection, from that threshold through 1.0 they produce `WARNING`,
+and above 1.0 they produce `VIOLATION`. Their detections carry both
+`residual = observed - limit` and utilization. Cooling rate uses positive
+magnitudes for both values.
+
+Absolute temperature, ordering, SoC range/rate, stuck, and stale checks remain
+binary and produce `VIOLATION` only.
+
+## DFM projection
+
+Guardian detections do not necessarily become DFM faults. The existing
+reporter projects configured `DetectionClass × DetectionLevel` pairs:
+
+| Guardian observation | DFM fault |
+|---|---|
+| `THERMAL_LIMIT / WARNING` | `BatteryOverTempWarning` |
+| `THERMAL_LIMIT / CRITICAL` | `BatteryOverTempCritical` |
+| `STREAM_STALE / VIOLATION` | `BatteryTempStreamStale` |
+| `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION` | `BatteryTempAbsoluteLimit` |
+| `PHYSICAL_TEMP_ORDERING / VIOLATION` | `BatteryTempOrdering` |
+| `PHYSICAL_TEMP_SPREAD / VIOLATION` | `BatteryTempSpread` |
+| `PHYSICAL_TEMP_HOTSPOT / VIOLATION` | `BatteryTempHotspot` |
+| `PHYSICAL_TEMP_RATE / VIOLATION` | `BatteryTempRate` |
+| `PHYSICAL_SOC_RANGE / VIOLATION` | `BatterySocRange` |
+| `PHYSICAL_SOC_RATE / VIOLATION` | `BatterySocRate` |
+| `SIGNAL_STUCK / VIOLATION` | `BatterySignalStuck` |
+
+Warnings for spread, hotspot, and rate remain available as internal evidence
+but intentionally have no DFM mapping. The diagnostic catalog contains no
+model thresholds.
 
 ## Injection ground truth versus observation
 
-The Fault Generator knows the injected cause. The Guardian detects violations
-of its model. The Guardian must not infer the injected fault class.
-
 ```text
-transport.drop ---+
-transport.delay --+--> STREAM_STALE
-source.dropout  ---+
-
-signal.spike ------> usually PHYSICAL_TEMP_RATE
-
-signal.combination -> zero, one, or multiple DetectionClass values
+Injected fault class
+        |
+        | affects system
+        v
+Guardian model
+        |
+        v
+DetectionClass × DetectionLevel
+        |
+        +------> Evidence / internal observation
+        |
+        +------> configured DFM mapping
 ```
 
-Every single-signal fault uses one `mutations[]` entry. A
-`signal.combination` uses at least two entries targeting distinct canonical
-signals; each component operator is `stuck`, `spike`, `drift`, or
-`out_of_range`. Transport and source faults use `action` instead of pretending
-to mutate a sensor value.
+Examples:
 
-At execution time the generator's ground-truth record contains
-`injection_id`, `injected_class`, `started_at`, and either `finished_at` or
-`duration_ms`. Signal records also contain the complete `mutations[]` list,
-including every component of a combination.
+```text
+signal.spike
+    -> PHYSICAL_TEMP_RATE / WARNING
+    -> later possibly PHYSICAL_TEMP_RATE / VIOLATION
+
+signal.drift
+    -> PHYSICAL_TEMP_HOTSPOT / WARNING
+    -> PHYSICAL_TEMP_SPREAD / WARNING
+    -> later possibly corresponding VIOLATIONs
+
+coherent temperature increase
+    -> THERMAL_LIMIT / WARNING
+    -> THERMAL_LIMIT / CRITICAL
+```
+
+`signal.spike` remains an injected class; there is no Guardian `SPIKE`
+detection. Signal combinations retain the complete `mutations[]` ground truth
+and may lead to zero, one, or multiple Guardian observations.

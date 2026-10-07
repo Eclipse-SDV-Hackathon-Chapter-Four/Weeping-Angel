@@ -16,6 +16,7 @@ struct ConfigurationFile {
 pub struct GuardianConfig {
     pub evaluation_period_ms: u64,
     pub missing_packet_timeout_ms: u64,
+    pub warning: WarningConfig,
     pub temperature: TemperatureConfig,
     pub soc: SocConfig,
     pub stuck: StuckConfig,
@@ -23,14 +24,31 @@ pub struct GuardianConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WarningConfig {
+    pub utilization_threshold: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemperatureConfig {
     pub absolute_min_c: f32,
     pub absolute_max_c: f32,
+    pub warning_margin_c: f32,
     pub reference_c: f32,
     pub hot_state_c: f32,
     pub spread: ThermalLimitConfig,
     pub hotspot: ThermalLimitConfig,
     pub dynamics: TemperatureDynamicsConfig,
+}
+
+impl TemperatureConfig {
+    pub fn warning_threshold_c(&self) -> f32 {
+        self.absolute_max_c - self.warning_margin_c
+    }
+
+    pub fn critical_threshold_c(&self) -> f32 {
+        self.absolute_max_c
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -113,13 +131,27 @@ impl GuardianConfig {
             bail!("guardian.missing_packet_timeout_ms must be greater than zero");
         }
 
+        require_finite(
+            "warning.utilization_threshold",
+            self.warning.utilization_threshold,
+        )?;
+        if !(0.0 < self.warning.utilization_threshold && self.warning.utilization_threshold < 1.0) {
+            bail!("warning.utilization_threshold must be greater than zero and less than one");
+        }
+
         let temperature = &self.temperature;
         require_finite("temperature.absolute_min_c", temperature.absolute_min_c)?;
         require_finite("temperature.absolute_max_c", temperature.absolute_max_c)?;
+        require_positive("temperature.warning_margin_c", temperature.warning_margin_c)?;
         require_finite("temperature.reference_c", temperature.reference_c)?;
         require_finite("temperature.hot_state_c", temperature.hot_state_c)?;
         if temperature.absolute_min_c >= temperature.absolute_max_c {
             bail!("temperature.absolute_min_c must be less than absolute_max_c");
+        }
+        if temperature.warning_threshold_c() <= temperature.absolute_min_c {
+            bail!(
+                "temperature.absolute_max_c - warning_margin_c must be greater than absolute_min_c"
+            );
         }
         if temperature.reference_c >= temperature.hot_state_c {
             bail!("temperature.reference_c must be less than hot_state_c");
@@ -173,10 +205,10 @@ impl GuardianConfig {
 }
 
 fn validate_thermal_limit(name: &str, limit: &ThermalLimitConfig) -> Result<()> {
-    require_non_negative(&format!("{name}.cold_c"), limit.cold_c)?;
-    require_non_negative(&format!("{name}.hot_c"), limit.hot_c)?;
+    require_positive(&format!("{name}.cold_c"), limit.cold_c)?;
+    require_positive(&format!("{name}.hot_c"), limit.hot_c)?;
     if limit.cold_c < limit.hot_c {
-        bail!("{name} must satisfy cold_c >= hot_c >= 0");
+        bail!("{name} must satisfy cold_c >= hot_c > 0");
     }
     Ok(())
 }
@@ -225,5 +257,35 @@ mod tests {
     fn inconsistent_temperature_range_fails() {
         let yaml = CONFIG.replace("absolute_min_c: -30.0", "absolute_min_c: 70.0");
         assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn warning_margin_must_be_positive() {
+        let yaml = CONFIG.replace("warning_margin_c: 10.0", "warning_margin_c: 0.0");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn derived_warning_threshold_must_exceed_absolute_minimum() {
+        let yaml = CONFIG.replace("warning_margin_c: 10.0", "warning_margin_c: 100.0");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn warning_utilization_threshold_must_be_in_open_unit_interval() {
+        for value in ["0.0", "1.0", "1.1"] {
+            let yaml = CONFIG.replace(
+                "utilization_threshold: 0.8",
+                &format!("utilization_threshold: {value}"),
+            );
+            assert!(GuardianConfig::from_yaml_str(&yaml).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn thermal_thresholds_are_derived_from_absolute_maximum_and_margin() {
+        let config = GuardianConfig::from_yaml_str(CONFIG).expect("valid configuration");
+        assert_eq!(config.temperature.warning_threshold_c(), 60.0);
+        assert_eq!(config.temperature.critical_threshold_c(), 70.0);
     }
 }

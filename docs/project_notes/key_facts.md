@@ -37,13 +37,16 @@ Never store credentials here — this file is committed to git.
 - Supported injected classes: `transport.delay`, `transport.drop`, `source.dropout`, `signal.stuck`, `signal.spike`, `signal.drift`, `signal.out_of_range`, and `signal.combination`
 - Input: existing BatteryTempEvent uProtocol URI `battery-vss/9001/1/9001`; listener stores `temp_min`, `temp_avg`, `temp_max`, `soc`, and local receive time only
 - Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once (ADR-004)
-- Detections: stream stale; absolute temperature, ordering, spread, hotspot and temperature-rate violations; SoC range/step violations; excitation-gated stuck signals
-- Reporting: one dummy `report_detection` function; DFM/Evidence Collector integration intentionally deferred
+- Guardian observations are `DetectionClass × DetectionLevel`: class identifies the model rule; level is `WARNING`, `VIOLATION`, or `CRITICAL`
+- Thermal observation: `THERMAL_LIMIT / WARNING` from 60 °C to below 70 °C and `THERMAL_LIMIT / CRITICAL` from 70 °C; the warning threshold is derived from `absolute_max_c - warning_margin_c`
+- Continuous checks: spread, hotspot, and temperature rate emit `WARNING` from 80% through 100% utilization and `VIOLATION` above the model limit; utilization and residual are retained
+- Binary checks: stream stale; absolute temperature and ordering; SoC range/step; excitation-gated stuck signals emit `VIOLATION` only
+- Reporting: the existing DFM reporter projects configured class/level pairs; thermal warning/critical retain `BatteryOverTempWarning`/`BatteryOverTempCritical`, while continuous-model warnings remain internal and have no DFM fault
 - HTTP: port 8080 by default, `/health` and `/state`
 - Dev-container workflow: `make test`, `make check`, and `make run` from the component directory invoke Cargo directly; the repository-mounted `target/` and Cargo home provide the caches
 - The shared `.devcontainer` initializes the Guardian's `fault-lib` submodule, installs rustfmt and Clippy, preinstalls the Codex VS Code extension, and forwards Guardian HTTP port 8080
 - `make check` also validates the canonical injection model and runs its malformed-configuration tests
-- Verification on 2026-10-07: dev-container `make check` passed formatting, Clippy with warnings denied, all 27 Rust tests, injection-model validation, and all 10 validator tests
+- Verification on 2026-10-07: dev-container `make check` passed formatting, Clippy with warnings denied, all 37 Rust tests, injection-model validation, and all 10 validator tests
 
 ## CAN Assets (`demo/can/`)
 

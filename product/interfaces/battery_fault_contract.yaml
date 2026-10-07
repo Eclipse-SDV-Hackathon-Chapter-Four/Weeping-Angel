@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 component: battery_guardian
 
 # This interface file defines event shapes only. Vocabulary and behavior live
@@ -10,14 +10,17 @@ canonical_artifacts:
   fault_injection_model: ../config/battery_guardian/fault_injection_model.yaml
 
 # Observation emitted for a Guardian detection state transition. The concrete
-# detection_class values come from the Guardian DetectionClass enum.
+# detection_class and detection_level values come from the Guardian enums.
+# fault_id is present only when the pair has a configured DFM projection.
 guardian_evidence_event:
   required:
     - run_id
     - detection_class
-    - fault_id
+    - detection_level
     - state
     - detected_at_ms
+  optional:
+    - fault_id
   context:
     - temp_min
     - temp_avg
@@ -27,6 +30,7 @@ guardian_evidence_event:
     - observed
     - limit
     - residual
+    - utilization
 
 # Authoritative injection-side record emitted by the campaign/Fault Generator.
 # injected_class and mutations are copied from the executed injection instance

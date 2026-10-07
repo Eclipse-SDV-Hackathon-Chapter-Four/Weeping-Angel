@@ -9,11 +9,12 @@ Documentation     Battery Guardian — physical-consistency and fault-campaign e
 ...                  injected_class, run_id, injection_id, injected_at_ms.
 ...
 ...               2) Guardian -> Evidence Collector (independent local evidence)
-...                  The Guardian MUST emit a GuardianEvidenceEvent before/independently of the
-...                  DFM write. Required fields: detection_class, fault_id, state, detected_at_ms,
+...                  The Guardian MUST emit a GuardianEvidenceEvent before/independently of an
+...                  optional DFM write. Required fields: detection_class, detection_level, state, detected_at_ms,
 ...                  temp_min, temp_avg, temp_max, soc; where applicable also observed, limit,
-...                  signal, source_message_id, source_timestamp_ms / sequence.
-...                  The same fault_id/context is written to the DFM for OpenSOVD visibility.
+...                  residual, utilization, signal, source_message_id,
+...                  source_timestamp_ms / sequence. Include fault_id only when a configured
+...                  DetectionClass x DetectionLevel DFM projection exists.
 ...
 ...               3) Evidence Collector
 ...                  Correlates injection ground truth, direct GuardianEvidenceEvent(s), and
@@ -22,16 +23,19 @@ Documentation     Battery Guardian — physical-consistency and fault-campaign e
 ...                  In particular, source dropout, transport drop and sufficiently long transport
 ...                  delay can all appear at the Guardian as STREAM_STALE.
 ...
-...               Guardian detection_class values used by this suite:
-...                 PHYSICAL_TEMP_ABSOLUTE_LIMIT
-...                 PHYSICAL_TEMP_ORDERING
-...                 PHYSICAL_TEMP_SPREAD
-...                 PHYSICAL_TEMP_HOTSPOT
-...                 PHYSICAL_TEMP_RATE
-...                 PHYSICAL_SOC_RANGE
-...                 PHYSICAL_SOC_RATE
-...                 SIGNAL_STUCK
-...                 STREAM_STALE
+...               Guardian observations used by this suite:
+...                 THERMAL_LIMIT / WARNING
+...                 THERMAL_LIMIT / CRITICAL
+...                 PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION
+...                 PHYSICAL_TEMP_ORDERING / VIOLATION
+...                 PHYSICAL_TEMP_SPREAD / WARNING or VIOLATION
+...                 PHYSICAL_TEMP_HOTSPOT / WARNING or VIOLATION
+...                 PHYSICAL_TEMP_RATE / WARNING or VIOLATION
+...                 PHYSICAL_SOC_RANGE / VIOLATION
+...                 PHYSICAL_SOC_RATE / VIOLATION
+...                 SIGNAL_STUCK / VIOLATION
+...                 STREAM_STALE / VIOLATION
+...               Continuous WARNING observations remain internal when no DFM mapping exists.
 ...
 ...               Physical model checked by the Guardian:
 ...                 T_abs_min <= T_min <= T_avg <= T_max <= T_abs_max
@@ -50,12 +54,14 @@ Library           SovdFaultLibrary
 ...                   catalog=%{CATALOG=../config/battery_guardian/guardian_diagnostics.json}
 ...                   report=%{REPORT=../reports/evidence_report.md}
 
-Suite Setup       Opensovd Lists All Catalog Faults    9
+Suite Setup       Opensovd Lists All Catalog Faults    11
 Suite Teardown    Write Evidence Report
 Test Setup        Reset To Clean Baseline
 
 *** Variables ***
 # DFM/OpenSOVD fault IDs. These are Guardian OBSERVATIONS, not injected causes.
+${F_THERMAL_WARNING}     BatteryOverTempWarning
+${F_THERMAL_CRITICAL}    BatteryOverTempCritical
 ${F_TEMP_ABSOLUTE}       BatteryTempAbsoluteLimit
 ${F_TEMP_ORDERING}       BatteryTempOrdering
 ${F_TEMP_SPREAD}         BatteryTempSpread

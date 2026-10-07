@@ -1,7 +1,39 @@
 {
     "id": "battery_guardian",
-    "version": 2,
+    "version": 3,
     "faults": [
+        {
+            "id": {
+                "Text": "BatteryOverTempWarning"
+            },
+            "name": "BatteryOverTemperatureWarning",
+            "summary": "Maximum cell temperature entered the configured warning band.",
+            "category": "Hardware",
+            "severity": "Warn",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
+        {
+            "id": {
+                "Text": "BatteryOverTempCritical"
+            },
+            "name": "BatteryOverTemperatureCritical",
+            "summary": "Maximum cell temperature reached the configured critical band.",
+            "category": "Hardware",
+            "severity": "Fatal",
+            "compliance": [
+                "SafetyCritical"
+            ],
+            "reporter_side_debounce": null,
+            "reporter_side_reset": null,
+            "manager_side_debounce": null,
+            "manager_side_reset": null
+        },
         {
             "id": {
                 "Text": "BatteryTempStreamStale"

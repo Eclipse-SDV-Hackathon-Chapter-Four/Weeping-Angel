@@ -106,7 +106,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
 **Decision:**
 - Canonical configuration lives under `product/config/battery_guardian/`: `guardian_model.yaml` parameterizes admissibility, `guardian_diagnostics.json` defines DFM representation, and `fault_injection_model.yaml` defines injection-side ground truth.
-- Guardian model semantics remain the combination of source code and `guardian_model.yaml`; the `DetectionClass` enum remains the detection vocabulary.
+- Guardian model semantics remain the combination of source code and `guardian_model.yaml`; `DetectionClass × DetectionLevel` is the observation vocabulary.
 - The existing DFM reporter consumes `guardian_diagnostics.json`. No second reporter or mapping mechanism is introduced.
 - Signal injections use canonical Guardian signal names and a uniform `mutations[]` representation. Single-signal classes require one mutation; `signal.combination` requires at least two distinct signals and forbids nested combinations.
 - Transport/source faults use actions rather than signal mutations. The Guardian never infers an injected class; the Fault Generator's execution record is authoritative for injection ground truth.
@@ -121,3 +121,30 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Injection-model validation rejects malformed single-signal, combination, transport, and source definitions before a campaign runs.
 - ✅ The DFM reporting implementation and its catalog schema remain unchanged apart from the path rename.
 - ❌ The current repository still needs a concrete Fault Generator/ASC mutator to execute the new injection model; this refactoring defines and validates its contract only.
+
+### ADR-006: Detection class and level are orthogonal (2026-10-07)
+
+**Context:**
+- Model rules and the degree to which they are approached or exceeded are different concepts; encoding both in class names creates a growing warning/critical class matrix.
+- A physically consistent battery sample can be hot enough to require a thermal warning or critical diagnostic, while continuous model bounds benefit from pre-violation observations.
+- Guardian observations, DFM diagnostics, and injected causes must remain distinct.
+
+**Decision:**
+- Every Guardian observation is `DetectionClass × DetectionLevel`, where class identifies the reacting model rule and level is `Warning`, `Violation`, or `Critical`.
+- Replace separate thermal classes with `THERMAL_LIMIT`: warning is active from the derived threshold `absolute_max_c - warning_margin_c` up to the maximum; critical is active at or above `absolute_max_c` and supersedes warning.
+- At the configured 70 °C boundary, `THERMAL_LIMIT / CRITICAL` is active without an absolute-limit violation; above it, `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION` is independently valid.
+- Spread, hotspot, and temperature-rate checks use `observed / limit`: no detection below the global utilization threshold, `Warning` from that threshold through 1.0, and `Violation` above 1.0. Other checks remain binary `Violation`s.
+- The existing DFM reporter is a configured class/level projection. Thermal warning/critical and existing physical violations retain their fault IDs; spread/hotspot/rate warnings remain internal evidence without new DFM catalog entries.
+- The injection vocabulary remains separate and unchanged. In particular, `signal.spike` is not a Guardian class and may be observed as a temperature-rate warning or violation.
+
+**Alternatives Considered:**
+- Create separate warning and critical classes per model rule → Rejected: severity is orthogonal to the rule and would duplicate the detection vocabulary.
+- Derive warnings with separate formulas → Rejected: one utilization fraction gives consistent semantics for continuous upper bounds.
+- Map every warning to a new DFM fault → Rejected: detections are internal evidence first; diagnostics are an explicit projection and the catalog has no suitable entries for the new continuous-bound warnings.
+- Add thermal or spike injection classes based on Guardian output → Rejected: they would confuse observed behavior with injected root cause.
+
+**Consequences:**
+- ✅ One stable class vocabulary supports warning, violation, and critical observations without class proliferation.
+- ✅ Continuous-model warnings carry residual and utilization for later Evidence Collector integration without changing the DFM catalog.
+- ✅ Valid hot samples and absolute-limit violations remain independently observable, and fault-injection ground truth remains separate.
+- ❌ The demonstrator has no hysteresis; values oscillating around thermal or utilization thresholds can produce repeated state transitions.

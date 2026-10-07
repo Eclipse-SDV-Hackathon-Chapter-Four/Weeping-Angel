@@ -2,9 +2,14 @@ guardian:
   evaluation_period_ms: 100
   missing_packet_timeout_ms: 500
 
+  warning:
+    utilization_threshold: 0.8
+
   temperature:
     absolute_min_c: -30.0
     absolute_max_c: 70.0
+
+    warning_margin_c: 10.0
 
     reference_c: 20.0
     hot_state_c: 70.0

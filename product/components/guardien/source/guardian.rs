@@ -84,16 +84,20 @@ fn report_detection(detection: &Detection, faults: &FaultReporterHandle) {
     if detection.active {
         warn!(
             class = detection.class.as_str(),
+            level = detection.level.as_str(),
             signal,
             observed = ?detection.observed,
             limit = ?detection.limit,
             residual = ?detection.residual,
+            utilization = ?detection.utilization,
             "Guardian detection active"
         );
     } else {
         info!(
             class = detection.class.as_str(),
-            signal, "Guardian detection cleared"
+            level = detection.level.as_str(),
+            signal,
+            "Guardian detection cleared"
         );
     }
 }
