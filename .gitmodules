@@ -4,3 +4,9 @@
 [submodule "fault-lib"]
 	path = product/components/fault-lib
 	url = https://github.com/eclipse-opensovd/fault-lib.git
+[submodule "product/components/kuksa-databroker"]
+	path = product/components/kuksa-databroker
+	url = https://github.com/eclipse-kuksa/kuksa-databroker.git
+[submodule "product/components/kuksa-can-provider"]
+	path = product/components/kuksa-can-provider
+	url = https://github.com/eclipse-kuksa/kuksa-can-provider.git
