@@ -15,6 +15,19 @@ use crate::request::{
 };
 
 const MAX_COMBINATIONS: usize = 4_096;
+/// Upper bound for the construction-failure summary text inside an UNSAT
+/// record detail (`reason.detail` itself has no schema length limit; this
+/// keeps the construction share short and single-quoted-YAML readable).
+const CONSTRUCTION_FAILURE_DETAIL_LIMIT: usize = 400;
+
+/// One rejected candidate-construction attempt, kept for UNSAT diagnostics.
+#[derive(Debug)]
+struct ConstructionFailure {
+    /// Combinatorial candidate index; `None` marks a failure while deriving
+    /// the candidate parameter choices themselves.
+    candidate: Option<usize>,
+    message: String,
+}
 
 #[derive(Debug)]
 pub enum GenerationOutcome {
@@ -114,6 +127,7 @@ pub fn generate(
         );
     }
 
+    let mut construction_failures: Vec<ConstructionFailure> = Vec::new();
     let candidates = if let Some(action) = &injection.action {
         vec![apply_action(
             &frames,
@@ -122,16 +136,25 @@ pub fn generate(
             config,
         )?]
     } else {
-        signal_candidates(request, injection, &frames, config)?
+        let (candidates, failures) = signal_candidates(request, injection, &frames, config);
+        construction_failures = failures;
+        candidates
     };
 
     if candidates.is_empty() {
+        // Every candidate was rejected while being constructed; surface the
+        // concrete rejection instead of the generic no-encoding note.
+        let detail = if construction_failures.is_empty() {
+            "no DBC-representable candidate trajectory could be constructed".to_owned()
+        } else {
+            summarize_construction_failures(&construction_failures)
+        };
         return Ok(GenerationOutcome::Unsatisfiable(Unsatisfiable {
             status: "UNSATISFIABLE",
             injection_id: request.injection_id.clone(),
             reason: UnsatisfiableReason {
                 code: "ENCODING_LIMIT".to_owned(),
-                detail: "no DBC-representable candidate trajectory could be constructed".to_owned(),
+                detail,
             },
         }));
     }
@@ -168,17 +191,24 @@ pub fn generate(
             .then_with(|| left.source_end_ms.cmp(&right.source_end_ms))
     });
     let Some((candidate, _candidate_observations)) = accepted.into_iter().next() else {
+        // Goal-level rejections keep the existing code/detail semantics; any
+        // additionally observed construction failures are appended afterwards.
+        let code = if last_failure.contains("forbidden") {
+            "FORBIDDEN_CODETECTION"
+        } else {
+            "PRIMARY_NOT_REACHED"
+        };
+        let mut detail = last_failure;
+        if !construction_failures.is_empty() {
+            detail.push_str("; additionally observed construction failures: ");
+            detail.push_str(&summarize_construction_failures(&construction_failures));
+        }
         return Ok(GenerationOutcome::Unsatisfiable(Unsatisfiable {
             status: "UNSATISFIABLE",
             injection_id: request.injection_id.clone(),
             reason: UnsatisfiableReason {
-                code: if last_failure.contains("forbidden") {
-                    "FORBIDDEN_CODETECTION"
-                } else {
-                    "PRIMARY_NOT_REACHED"
-                }
-                .to_owned(),
-                detail: last_failure,
+                code: code.to_owned(),
+                detail,
             },
         }));
     };
@@ -247,24 +277,106 @@ fn signal_candidates(
     injection: &ResolvedInjection,
     original: &[CaseFrame],
     config: &GuardianConfig,
-) -> Result<Vec<Candidate>> {
+) -> (Vec<Candidate>, Vec<ConstructionFailure>) {
     let start = request.lead_in_frames;
     let baseline = original[start - 1].values;
-    let choices: Vec<Vec<Option<f32>>> = injection
-        .mutations
-        .iter()
-        .map(|mutation| parameter_choices(mutation, baseline, request, config))
-        .collect::<Result<_>>()?;
-    let combinations = cartesian_choices(&choices);
     let mut candidates = Vec::new();
-    for combination in combinations {
-        if let Ok(candidate) =
-            apply_mutations(original, start, &injection.mutations, &combination, config)
-        {
-            candidates.push(candidate);
+    let mut construction_failures = Vec::new();
+    let mut choices = Vec::with_capacity(injection.mutations.len());
+    for (index, mutation) in injection.mutations.iter().enumerate() {
+        match parameter_choices(mutation, baseline, request, config) {
+            Ok(values) => choices.push(values),
+            Err(error) => construction_failures.push(ConstructionFailure {
+                candidate: None,
+                message: format!("mutation {index}: {error:#}"),
+            }),
         }
     }
-    Ok(candidates)
+    if !construction_failures.is_empty() {
+        return (candidates, construction_failures);
+    }
+    let combinations = cartesian_choices(&choices);
+    for (index, combination) in combinations.iter().enumerate() {
+        match apply_mutations(
+            original,
+            start,
+            &injection.mutations,
+            combination,
+            &request.generation_goal,
+            config,
+        ) {
+            Ok(candidate) => candidates.push(candidate),
+            Err(error) => construction_failures.push(ConstructionFailure {
+                candidate: Some(index),
+                message: format!("{error:#}"),
+            }),
+        }
+    }
+    (candidates, construction_failures)
+}
+
+/// Reduces per-candidate construction failures to the UNSAT detail text. A
+/// single failed attempt keeps its concrete message verbatim; candidates that
+/// share one failure message collapse into one group labeled with their
+/// candidate indices; distinct causes are joined with "; ". The joined text
+/// is hard-capped at CONSTRUCTION_FAILURE_DETAIL_LIMIT characters.
+fn summarize_construction_failures(failures: &[ConstructionFailure]) -> String {
+    let render_single = |failure: &ConstructionFailure| match failure.candidate {
+        Some(index) => format!("candidate {index}: {}", failure.message),
+        None => format!("candidate parameters: {}", failure.message),
+    };
+    if failures.len() == 1 {
+        return render_single(&failures[0]);
+    }
+    let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
+    for failure in failures {
+        match groups
+            .iter_mut()
+            .find(|(message, _)| *message == failure.message)
+        {
+            Some((_, labels)) => {
+                let label = failure
+                    .candidate
+                    .map_or_else(|| "parameters".to_owned(), |index| index.to_string());
+                if labels.last() != Some(&label) {
+                    labels.push(label);
+                }
+            }
+            None => {
+                let label = failure
+                    .candidate
+                    .map_or_else(|| "parameters".to_owned(), |index| index.to_string());
+                groups.push((failure.message.as_str(), vec![label]));
+            }
+        }
+    }
+    let mut summary = groups
+        .into_iter()
+        .map(|(message, labels)| {
+            let prefix = match labels.len() {
+                1 if labels[0] == "parameters" => "candidate parameters".to_owned(),
+                1 => format!("candidate {}", labels[0]),
+                count if count > 4 => {
+                    // Keep the summary readable: the first four candidate
+                    // labels plus a count instead of every index.
+                    format!(
+                        "candidates {}, … (+{} more attempts)",
+                        labels[..4].join(", "),
+                        count - 4
+                    )
+                }
+                _ => format!("candidates {}", labels.join(", ")),
+            };
+            format!("{prefix}: {message}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    if summary.chars().count() > CONSTRUCTION_FAILURE_DETAIL_LIMIT {
+        let budget = CONSTRUCTION_FAILURE_DETAIL_LIMIT - '…'.len_utf8();
+        summary = summary.chars().take(budget).collect();
+        summary.push('…');
+    }
+    summary
 }
 
 fn parameter_choices(
@@ -383,6 +495,7 @@ fn apply_mutations(
     start: usize,
     mutations: &[Mutation],
     choices: &[Option<f32>],
+    goal: &GenerationGoal,
     config: &GuardianConfig,
 ) -> Result<Candidate> {
     let mut frames = original.to_vec();
@@ -424,7 +537,7 @@ fn apply_mutations(
         });
     }
 
-    ensure_stuck_excitation(&frames, start, mutations, config)?;
+    ensure_stuck_excitation(&frames, start, mutations, goal, config)?;
     let return_index = (start + max_duration).min(frames.len() - 1);
     let start_ms = frames[start].arrival_ms;
     let end_ms = frames[return_index].arrival_ms;
@@ -446,8 +559,23 @@ fn ensure_stuck_excitation(
     frames: &[CaseFrame],
     start: usize,
     mutations: &[Mutation],
+    goal: &GenerationGoal,
     config: &GuardianConfig,
 ) -> Result<()> {
+    // ADR-014 negative-control semantics (forward-verified per guardian model):
+    // the Guardian arms stuck detection only on peer excitation (>=
+    // temperature_excitation_c in the window, guardian_model.yaml). A
+    // negative control that forbids SIGNAL_STUCK therefore gets its wanted
+    // outcome exactly from an UNexcited stuck hold, and must not be rejected
+    // by this gate. Skip only when SIGNAL_STUCK appears in `forbidden`;
+    // neutral/empty goals keep enforcement (fail-closed, no verdict risk).
+    if goal
+        .forbidden
+        .iter()
+        .any(|observation| observation.class == "SIGNAL_STUCK")
+    {
+        return Ok(());
+    }
     for mutation in mutations
         .iter()
         .filter(|mutation| mutation.operator == "stuck")
@@ -618,4 +746,85 @@ fn check_goal(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod construction_failure_summary_tests {
+    use super::*;
+
+    fn failure(candidate: Option<usize>, message: &str) -> ConstructionFailure {
+        ConstructionFailure {
+            candidate,
+            message: message.to_owned(),
+        }
+    }
+
+    #[test]
+    fn single_failure_is_reported_verbatim_with_candidate_index() {
+        let failures = [failure(
+            Some(0),
+            "stuck trajectory has no independent excitation",
+        )];
+        assert_eq!(
+            summarize_construction_failures(&failures),
+            "candidate 0: stuck trajectory has no independent excitation"
+        );
+    }
+
+    #[test]
+    fn single_parameter_failure_is_reported_verbatim() {
+        let failures = [failure(
+            None,
+            "mutation 0: spike parameter must be non-zero",
+        )];
+        assert_eq!(
+            summarize_construction_failures(&failures),
+            "candidate parameters: mutation 0: spike parameter must be non-zero"
+        );
+    }
+
+    #[test]
+    fn identical_failures_collapse_into_one_labeled_group() {
+        let message = "stuck trajectory has no independent excitation";
+        let failures = [
+            failure(Some(0), message),
+            failure(Some(1), message),
+            failure(Some(2), message),
+        ];
+        assert_eq!(
+            summarize_construction_failures(&failures),
+            "candidates 0, 1, 2: stuck trajectory has no independent excitation"
+        );
+    }
+
+    #[test]
+    fn large_identical_group_lists_first_labels_and_counts() {
+        let failures: Vec<_> = (0..40)
+            .map(|index| failure(Some(index), "quantization conflict"))
+            .collect();
+        assert_eq!(
+            summarize_construction_failures(&failures),
+            "candidates 0, 1, 2, 3, … (+36 more attempts): quantization conflict"
+        );
+    }
+
+    #[test]
+    fn distinct_failures_join_with_separator() {
+        let failures = [failure(Some(0), "alpha"), failure(Some(2), "beta")];
+        assert_eq!(
+            summarize_construction_failures(&failures),
+            "candidate 0: alpha; candidate 2: beta"
+        );
+    }
+
+    #[test]
+    fn joined_summary_is_capped_at_limit_with_ellipsis() {
+        let failures: Vec<_> = (0..50)
+            .map(|index| failure(Some(index), format!("failure {index} u").as_str()))
+            .collect();
+        let summary = summarize_construction_failures(&failures);
+        assert!(summary.chars().count() <= CONSTRUCTION_FAILURE_DETAIL_LIMIT);
+        assert!(summary.ends_with('…'));
+        assert!(summary.starts_with("candidate 0: failure 0"));
+    }
 }

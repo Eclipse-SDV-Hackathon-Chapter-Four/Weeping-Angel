@@ -144,6 +144,206 @@ fn every_canonical_v1_injection_can_generate_a_verified_case() {
     }
 }
 
+/// Writes a flat synthetic template (no peer excitation in the mutation
+/// window) and returns its path.
+fn flat_template(temp: &TempDir) -> PathBuf {
+    let template = temp.path().join("flat.asc");
+    let mut contents = String::from(
+        "date Mon Aug 25 09:00:00 2026\n\
+         base hex  timestamps absolute\n\
+         internal events logged\n\
+         Begin Triggerblock Mon Aug 25 09:00:00.000 2026\n",
+    );
+    for index in 0..40 {
+        let milliseconds = (index * 100) as u32;
+        let time = milliseconds as f64 / 1_000.0;
+        contents.push_str(&format!(
+            " {time:.6} CANFD   1 Rx        100                                   \
+             0 0 a 16 {:02X} {:02X} 00 00 8C 00 8C 00 8C 00 A0 00 00 00 00 00      \
+             0    0     1000        0        0        0        0        0\n",
+            milliseconds & 0xFF,
+            (milliseconds >> 8) & 0xFF,
+        ));
+    }
+    contents.push_str("End Triggerblock\n");
+    fs::write(&template, contents).unwrap();
+    template
+}
+
+#[test]
+fn unsatisfiable_stuck_writes_concrete_construction_failure_detail() {
+    let temp = TempDir::new().unwrap();
+    let root = repository_root();
+    let template = flat_template(&temp);
+    let request_path = temp.path().join("signal_stuck_flat.yaml");
+    let contents = format!(
+        "template: {}\n\
+         battery_model: {}\n\
+         run_id: construction-failure-test\n\
+         started_at: 2026-10-07T00:00:00Z\n\
+         injection_id: signal_stuck_flat\n\
+         injected_class: signal.stuck\n\
+         mutations:\n\
+         \x20 - signal: temp_avg\n\
+         \x20   operator: stuck\n\
+         \x20   parameters:\n\
+         \x20     duration_samples: 5\n\
+         generation_goal:\n\
+         \x20 primary:\n\
+         \x20   - class: SIGNAL_STUCK\n\
+         \x20     level: VIOLATION\n\
+         \x20 allowed: []\n\
+         \x20 forbidden: []\n\
+         \x20 allow_unspecified_codetections: true\n\
+         seed: 0\n\
+         lead_in_frames: 20\n",
+        template.display(),
+        root.join("product/config/battery_guardian/guardian_model.yaml")
+            .display(),
+    );
+    fs::write(&request_path, contents).unwrap();
+
+    let output = temp.path().join("output");
+    let RunResult::Unsatisfiable { result } = run(&request_path, &output).unwrap() else {
+        panic!("stuck without peer excitation must be unsatisfiable");
+    };
+    let record: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(result).unwrap()).unwrap();
+    assert_eq!(record["reason"]["code"], "ENCODING_LIMIT");
+    let detail = record["reason"]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains(
+            "stuck trajectory has no independent excitation in its nominal or explicitly mutated peers"
+        ),
+        "unexpected detail: {detail}"
+    );
+    assert!(
+        detail.starts_with("candidate 0: "),
+        "unexpected detail: {detail}"
+    );
+}
+
+#[test]
+fn forbidden_stuck_negative_control_generates_without_excitation() {
+    let temp = TempDir::new().unwrap();
+    let root = repository_root();
+    // Flat template: no peer excitation in the mutation window. With
+    // SIGNAL_STUCK forbidden (ADR-014 negative control), the unexcited hold
+    // is the wanted outcome and must NOT be rejected by the stuck gate.
+    let template = flat_template(&temp);
+    let request_path = temp.path().join("signal_stuck_negative_control.yaml");
+    let contents = format!(
+        "template: {}\n\
+         battery_model: {}\n\
+         run_id: negative-control-test\n\
+         started_at: 2026-10-07T00:00:00Z\n\
+         injection_id: signal_stuck_negative_control\n\
+         injected_class: signal.stuck\n\
+         mutations:\n\
+         \x20 - signal: temp_avg\n\
+         \x20   operator: stuck\n\
+         \x20   parameters:\n\
+         \x20     duration_samples: 5\n\
+         generation_goal:\n\
+         \x20 primary: []\n\
+         \x20 allowed: []\n\
+         \x20 forbidden:\n\
+         \x20   - class: SIGNAL_STUCK\n\
+         \x20     level: VIOLATION\n\
+         \x20 allow_unspecified_codetections: true\n\
+         seed: 0\n\
+         lead_in_frames: 20\n",
+        template.display(),
+        root.join("product/config/battery_guardian/guardian_model.yaml")
+            .display(),
+    );
+    fs::write(&request_path, contents).unwrap();
+
+    let output = temp.path().join("output");
+    let RunResult::Generated {
+        ground_truth,
+        oracle,
+        ..
+    } = run(&request_path, &output).unwrap()
+    else {
+        panic!("forbidden-stuck negative control must be satisfiable");
+    };
+    let truth = fs::read_to_string(ground_truth).unwrap();
+    assert!(truth.contains("operator: stuck"));
+    let oracle = fs::read_to_string(oracle).unwrap();
+    assert!(oracle.contains("status: SATISFIED"));
+}
+
+#[test]
+fn unsat_goal_detail_appends_observed_construction_failures() {
+    let temp = TempDir::new().unwrap();
+    let root = repository_root();
+    // Stuck over the (nominal, exciting) template never fails construction,
+    // but the drift sub-mutation probes a sub-quantum rate that is not DBC
+    // representable; a utilization target of 100 leaves every constructed
+    // candidate goal-failing. The record must carry BOTH reason families:
+    // codes stay goal-driven, the construction failures are appended.
+    let request = temp.path().join("probe_mixed.yaml");
+    let contents = format!(
+        "template: {}\n\
+         battery_model: {}\n\
+         run_id: probe-mixed\n\
+         started_at: 2026-10-07T00:00:00Z\n\
+         injection_id: probe_mixed\n\
+         injected_class: signal.combination\n\
+         mutations:\n\
+         \x20 - signal: temp_avg\n\
+         \x20   operator: stuck\n\
+         \x20   parameters:\n\
+         \x20     duration_samples: 40\n\
+         \x20 - signal: temp_max\n\
+         \x20   operator: drift\n\
+         \x20   parameters:\n\
+         \x20     rate_per_sample: 0.05\n\
+         \x20     duration_samples: 1\n\
+         generation_goal:\n\
+         \x20 primary:\n\
+         \x20   - class: PHYSICAL_TEMP_RATE\n\
+         \x20     level: VIOLATION\n\
+         \x20 allowed: []\n\
+         \x20 forbidden: []\n\
+         \x20 allow_unspecified_codetections: true\n\
+         seed: 0\n\
+         lead_in_frames: 20\n\
+         search:\n\
+         \x20 warning_target_utilization: 0.9\n\
+         \x20 violation_target_utilization: 100.0\n",
+        root.join("product/config/battery_temp_with_ts.asc")
+            .display(),
+        root.join("product/config/battery_guardian/guardian_model.yaml")
+            .display(),
+    );
+    fs::write(&request, contents).unwrap();
+
+    let output = temp.path().join("output");
+    let RunResult::Unsatisfiable { result } = run(&request, &output).unwrap() else {
+        panic!("a utilization target of 100 cannot be reached");
+    };
+    let record: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(result).unwrap()).unwrap();
+    assert_eq!(record["reason"]["code"], "PRIMARY_NOT_REACHED");
+    let detail = record["reason"]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("did not reach target utilization 100"),
+        "unexpected detail: {detail}"
+    );
+    assert!(
+        detail.contains(
+            "; additionally observed construction failures: candidate 0: temperature value "
+        ),
+        "unexpected detail: {detail}"
+    );
+    assert!(
+        detail.ends_with("is not representable with quantum 0.5"),
+        "unexpected detail: {detail}"
+    );
+}
+
 #[test]
 fn impossible_goal_writes_structured_unsatisfiable_result() {
     let temp = TempDir::new().unwrap();

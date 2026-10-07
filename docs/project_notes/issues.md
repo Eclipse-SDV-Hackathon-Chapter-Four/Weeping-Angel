@@ -9,6 +9,12 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
+### 2026-10-08 - Mutator: UNSAT diagnostics + goal-aware stuck excitation gate
+
+- **Status**: In Progress
+- **Description**: Two systematic generation fixes in `case_mutator`. (1) Candidate-construction failures (e.g. `apply_mutations`/`ensure_stuck_excitation` bails) are now collected and summarized into the UNSAT record's `reason.detail` instead of being silently swallowed — the generic "no DBC-representable candidate trajectory" text remains only as fallback. (2) The stuck excitation gate is goal-aware: it skips only when `SIGNAL_STUCK` is in the goal's `forbidden` list (ADR-014 negative-control semantics — an unexcited hold is the intended undetectable incident); must-detect and neutral goals keep enforcement (fail-closed). `signal.stuck` incident 1 (hold n−1) now GENERATES on all three nominal scenarios.
+- **Notes**: Remaining stuck UNSATs are incidents 2–5 (must-detect): no nominal template carries peer excitation ≥ 1.0 °C / 1.0 pp within the hold window (measured max amplitudes 0.5 °C / 0.5 pp), so the Guardian forward-verified gate legitimately rejects them. Options for the harness side (each a spec-level decision per §9): companion excitation mutation in the stuck incidents (validator currently allows only one mutation per stuck injection), lowered template thresholds, or respec of the detected-incident goals. Harness smoke base: 22 experiments, UNSAT at incident 1 gone (stuck), spike/drift design-level UNSATs unchanged.
+
 ### 2026-10-07 - Bake the Python environment into the devcontainer image
 - **Status**: Resolved
 - **Description**: Added a venv layer to `.devcontainer/Dockerfile` that creates `/home/vscode/.venv` and installs both `.devcontainer/requirements.txt` (robotframework, requests, pyyaml, jsonschema) and the KUKSA CAN-provider `/opt/kuksa-can-provider/requirements.in` (cantools, python-can, kuksa-client, ...), owned by `vscode:vscode`. `.devcontainer/post-create.sh` now only provisions the venv as a fallback (guarded by an import check), and `tools/docker_shell.sh` defaults to the rebuilt image `weeping-angel-devcontainer:latest`.
