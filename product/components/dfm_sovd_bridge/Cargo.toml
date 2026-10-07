@@ -1,0 +1,28 @@
+[package]
+name = "dfm-sovd-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "source/lib.rs"
+
+[[bin]]
+name = "dfm_sovd_bridge"
+path = "source/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+http = "1"
+schemars = { version = "1", features = ["derive", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dfm_lib = { path = "../fault-lib/src/dfm_lib" }
+opensovd-core = { path = "../opensovd-core/opensovd-core" }
+opensovd-extra = { path = "../opensovd-core/opensovd-extra", features = ["trace"] }
+opensovd-models = { path = "../opensovd-core/opensovd-models" }
+opensovd-providers = { path = "../opensovd-core/opensovd-providers" }
+opensovd-server = { path = "../opensovd-core/opensovd-server" }
