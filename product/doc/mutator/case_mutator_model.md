@@ -145,6 +145,7 @@ the VSS bridge, and never infers a class from Guardian output.
 | `template` | reference ASC path | nominal/reference replay (battery frames CAN `0x100`, DLC 8) |
 | `output_dir` | `cases/<run_id>` | one mutated `.asc` + ground-truth record per case |
 | `repetitions` | 1 | cases generated per run |
+| `battery_model` | `product/config/battery_guardian/guardian_model.yaml` | battery model parameters consumed by the recipes, read-only (§2.4) |
 
 ### 2.2 Timing and quantization (fixed by the CAN asset / DBC)
 
@@ -166,27 +167,43 @@ the VSS bridge, and never infers a class from Guardian output.
 Individual recipes may override these; overrides are part of the case's
 parameters and are recorded in the ground-truth record.
 
-### 2.4 Target limits (mirror of the Guardian model)
+### 2.4 Battery model parameters (read from the Guardian model)
 
-Derived from the authoritative Guardian configuration
-(`product/config/battery_guardian/guardian_model.yaml`); the mutator does not
-redefine them.
+The recipes in §4–§8 are the inverse of the Guardian's invariants: a mutation
+must drive the target residual across zero (or its utilization across the
+warning threshold) while staying inside every other check — rate, stuck, and
+freshness. The generator therefore needs the battery model's admissibility
+parameters. They are an **input**, not mutator configuration: the generator
+reads them from the authoritative Guardian model
+(`product/config/battery_guardian/guardian_model.yaml`; the `battery_model`
+parameter of §2.1) at generation time and must not redefine or override them.
+Formulas and level semantics are defined in `battery_guardian_model.md` and only
+referenced here.
 
-| Parameter | Symbol | Value | Source |
+The table lists every model key the generator consumes and its use:
+
+| `guardian_model.yaml` key | Symbol | Value | Generator use |
 |---|---:|---:|---|
-| Absolute min / max | $T_{\mathrm{abs,min}}/T_{\mathrm{abs,max}}$ | −30 / 70 | model §2.2 |
-| Warning margin | $M_{\mathrm{warning}}$ | 10 | model §2.2 |
-| Warning / critical threshold | $T_{\mathrm{warn}}/T_{\mathrm{crit}}$ | 60 / 70 | model §2.2 |
-| Utilization threshold | $u_{\mathrm{warning}}$ | 0.8 | model §2.2 |
-| Reference / hot | $T_{\mathrm{ref}}/T_{\mathrm{hot}}$ | 20 / 70 | model §2.3 |
-| Spread cold / hot | $S_{\mathrm{cold}}/S_{\mathrm{hot}}$ | 12 / 7 | model §2.4 |
-| Hotspot cold / hot | $H_{\mathrm{cold}}/H_{\mathrm{hot}}$ | 5 / 2 | model §2.4 |
-| Heating cold / hot | $R_{\uparrow,\mathrm{cold}}/R_{\uparrow,\mathrm{hot}}$ | 8 / 5 | model §2.5 |
-| Cooling | $R_\downarrow$ | 6 | model §2.5 |
-| SoC min / max / step | $SoC_{\min}/SoC_{\max}/\Delta SoC_{\max}$ | 0 / 100 / 0.5 | model §2.2/§6 |
-| Stuck window / flatness | $N_{\mathrm{stuck}}/\epsilon_{\mathrm{stuck}}$ | 10 / 0.25 | model §7 |
-| Excitation | $E_T/E_{SoC}$ | 1.0 / 1.0 | model §7 |
-| Stale timeout | $\tau_\mathrm{stale}$ | 0.5 (config) / 2.0 (model) | Open point D |
+| `evaluation_period_ms` | $\tau_{\mathrm{watchdog}}$ | 100 ms | evaluation cadence; equal to $\Delta t$, so every mutated frame is evaluated once |
+| `missing_packet_timeout_ms` | $\tau_\mathrm{stale}$ | 500 ms | §8 gap size $n \ge \lceil \tau_\mathrm{stale}/\Delta t \rceil$ (Open point D) |
+| `warning.utilization_threshold` | $u_{\mathrm{warning}}$ | 0.8 | warning band of §3.3, §4.4, §4.5, §5 |
+| `temperature.absolute_min_c` / `absolute_max_c` | $T_{\mathrm{abs,min}}/T_{\mathrm{abs,max}}$ | −30 / 70 °C | §4.1 `out_of_range` target values |
+| `temperature.warning_margin_c` | $M_{\mathrm{warning}}$ | 10 °C | §4.2: $T_{\mathrm{warn}} = T_{\mathrm{abs,max}} - M_{\mathrm{warning}} = 60$ |
+| `temperature.reference_c` / `hot_state_c` | $T_{\mathrm{ref}}/T_{\mathrm{hot}}$ | 20 / 70 °C | $\theta(T)$ for §4.4, §4.5, §5 |
+| `temperature.spread.cold_c` / `hot_c` | $S_{\mathrm{cold}}/S_{\mathrm{hot}}$ | 12 / 7 °C | §4.4 drift target size |
+| `temperature.hotspot.cold_c` / `hot_c` | $H_{\mathrm{cold}}/H_{\mathrm{hot}}$ | 5 / 2 °C | §4.5 joint shifts and ramps |
+| `temperature.dynamics.heating_rate_c_per_s.cold` / `hot` | $R_{\uparrow,\mathrm{cold}}/R_{\uparrow,\mathrm{hot}}$ | 8 / 5 °C/s | §3.3 rate safety; §5 violations |
+| `temperature.dynamics.cooling_rate_c_per_s` | $R_\downarrow$ | 6 °C/s | §3.3 rate safety; §5 cooling |
+| `temperature.dynamics.soc_coupling.*` | $K_{SoC}/Q_{\mathrm{cap}}$ | disabled / 0.25 °C/pp / 2.0 pp/s | §5 SoC-dependent widening; `enabled: false` keeps the bound temperature-only |
+| `soc.min_percent` / `max_percent` | $SoC_{\min}/SoC_{\max}$ | 0 / 100 | §6 range recipe target |
+| `soc.max_step_pp` | $\Delta SoC_{\max}$ | 0.5 pp | §6 rate recipe step |
+| `stuck.enabled` | — | true | §7 stuck recipes are part of the campaign |
+| `stuck.window_samples` | $N_{\mathrm{stuck}}$ | 10 | §7 hold length; shorter freezes do not trip |
+| `stuck.flatness_epsilon_c` | $\epsilon_{\mathrm{stuck}}$ | 0.25 °C | §7 freeze flatness vs. peer wiggle amplitude |
+| `stuck.temperature_excitation_c` / `soc_excitation_pp` | $E_T/E_{SoC}$ | 1.0 °C / 1.0 pp | §7 peer excitation |
+
+Each generated case records the model configuration it was generated against
+(§10), so a later configuration change cannot silently invalidate past cases.
 
 ## 3. Generic mutation formulation
 
@@ -476,6 +493,7 @@ injection_id: <instance id>
 injected_class: signal.spike
 started_at: <epoch wall clock, ISO-8601>
 duration_ms: 100            # or finished_at
+battery_model: product/config/battery_guardian/guardian_model.yaml
 mutations:                  # signal faults only
   - signal: temp_max
     operator: spike
@@ -488,6 +506,8 @@ mutations:                  # signal faults only
   `parameters`; a `signal.combination` carries the complete list.
 - `run_id` binds the record to the campaign run (contract
   `campaign_ground_truth_event`).
+- `battery_model` names the model configuration the case was generated against
+  (§2.4); informative provenance beyond the contract's required fields.
 - Time base: `started_at` is **epoch wall clock**, so it correlates with the
   Guardian's `detected_at_ms`; the replay-relative `injected_at_ms` of the
   prototype is superseded.
@@ -525,32 +545,7 @@ case_mutator:
   temperature_quantum_c: 0.5
   soc_quantum_pp: 0.5
 
-  # Target limits mirror the Guardian (config/battery_guardian/guardian_model.yaml).
-  temperature:
-    absolute_min_c: -30.0
-    absolute_max_c: 70.0
-    warning_margin_c: 10.0    # T_warn = 60, T_crit = 70
-    reference_c: 20.0
-    hot_state_c: 70.0
-    spread:  { cold_c: 12.0, hot_c: 7.0 }
-    hotspot: { cold_c: 5.0,  hot_c: 2.0 }
-    heating_rate_c_per_s: { cold: 8.0, hot: 5.0 }
-    cooling_rate_c_per_s: 6.0
-
-  warning:
-    utilization_threshold: 0.8
-
-  soc:
-    min_percent: 0.0
-    max_percent: 100.0
-    max_step_pp: 0.5
-
-  stream:
-    stale_timeout_ms: 500     # Open point D: model doc proposes 2000
-
-  stuck:
-    window_samples: 10
-    flatness_epsilon_c: 0.25
-    temperature_excitation_c: 1.0
-    soc_excitation_pp: 1.0
+  # Read-only input: the authoritative battery model (ADR-005/ADR-008). The
+  # generator consumes the keys listed in §2.4 and never redefines them.
+  battery_model: product/config/battery_guardian/guardian_model.yaml
 ```
