@@ -31,3 +31,9 @@ is not authoritative) — they do not become open issues here.
 - **Status**: Resolved
 - **Description**: Added `Warning`, `Violation`, and `Critical` levels orthogonal to detection classes; thermal state now uses one `THERMAL_LIMIT` class and continuous model bounds produce utilization warnings.
 - **Notes**: Thermal DFM IDs and existing physical-violation IDs remain unchanged. Spread/hotspot/rate warnings remain internal observations without new DFM entries; boundary, transition, catalog, and projection tests pass in the 37-test dev-container suite.
+
+### 2026-10-07 - Publish Guardian fault events over uProtocol
+- **Status**: Resolved
+- **Description**: Every DFM fault change is also published as JSON `GuardianFaultEvent` on `//guardian/1001/1/8001`; aggregation moved to `guardian_faults.rs`, DFM and uProtocol channels independent (ADR-007).
+- **Notes**: Transitions plus startup baseline only. 41 Rust tests pass; Clippy (`-D warnings`) and rustfmt clean in the dev-container image.
+

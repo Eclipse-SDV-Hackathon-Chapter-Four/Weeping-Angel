@@ -13,7 +13,11 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use battery_guardian::guardian_faults::FaultAggregator;
 use battery_guardian::guardian_reporting::{self, FaultReporterHandle};
+use battery_guardian::guardian_uprotocol::{
+    self, FaultEventPublisherHandle, GUARDIAN_AUTHORITY, GUARDIAN_UE_ID, GUARDIAN_UE_VERSION,
+};
 use battery_guardian::{BatterySample, Detection, GuardianConfig, GuardianRuntime};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -75,8 +79,19 @@ fn decode_battery_event(message: &UMessage) -> Result<BatteryTempEvent> {
     serde_json::from_slice(payload).context("decode BatteryTempEvent JSON")
 }
 
-fn report_detection(detection: &Detection, faults: &FaultReporterHandle) {
-    faults.report(detection);
+/// Fault-reporting channels; each receives every fault-level change
+/// independently (ADR-007).
+struct FaultChannels {
+    aggregator: FaultAggregator,
+    dfm: FaultReporterHandle,
+    uprotocol: FaultEventPublisherHandle,
+}
+
+fn report_detection(detection: &Detection, faults: &mut FaultChannels) {
+    if let Some(event) = faults.aggregator.apply(detection) {
+        faults.dfm.report(&event);
+        faults.uprotocol.publish(&event);
+    }
     let signal = detection
         .signal
         .map(|signal| signal.as_str())
@@ -105,7 +120,7 @@ fn report_detection(detection: &Detection, faults: &FaultReporterHandle) {
 fn start_periodic_guardian(
     state: AppState,
     config: GuardianConfig,
-    faults: FaultReporterHandle,
+    mut faults: FaultChannels,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(config.evaluation_period());
@@ -114,7 +129,7 @@ fn start_periodic_guardian(
             interval.tick().await;
             let detections = state.runtime.lock().await.cycle(Instant::now(), &config);
             for detection in detections {
-                report_detection(&detection, &faults);
+                report_detection(&detection, &mut faults);
             }
         }
     })
@@ -171,7 +186,11 @@ fn battery_temp_uri() -> UUri {
 }
 
 fn make_uri_provider() -> Arc<dyn LocalUriProvider> {
-    Arc::new(StaticUriProvider::new("guardian", 0x1001, 0x01))
+    Arc::new(StaticUriProvider::new(
+        GUARDIAN_AUTHORITY,
+        GUARDIAN_UE_ID,
+        GUARDIAN_UE_VERSION,
+    ))
 }
 
 async fn open_up_transport(uri_provider: Arc<dyn LocalUriProvider>) -> Result<Arc<dyn UTransport>> {
@@ -252,7 +271,11 @@ async fn main() -> Result<()> {
 
     let sovd_path =
         std::env::var("GUARDIAN_SOVD_PATH").unwrap_or_else(|_| "battery_guardian".to_string());
-    let faults = guardian_reporting::spawn(fault_catalog_path(), sovd_path);
+    let faults = FaultChannels {
+        aggregator: FaultAggregator::default(),
+        dfm: guardian_reporting::spawn(fault_catalog_path(), sovd_path.clone()),
+        uprotocol: guardian_uprotocol::spawn(Arc::clone(&transport), sovd_path),
+    };
     let _periodic_guardian = start_periodic_guardian(state.clone(), config, faults);
 
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());

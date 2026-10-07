@@ -69,6 +69,10 @@ Warnings for spread, hotspot, and rate remain available as internal evidence
 but intentionally have no DFM mapping. The diagnostic catalog contains no
 model thresholds.
 
+Every mapped fault change is also mirrored, with the same fault ids, as
+`GuardianFaultEvent` JSON on uProtocol topic `//guardian/1001/1/8001`
+(ADR-007). Unmapped warnings are published on neither channel.
+
 ## Injection ground truth versus observation
 
 ```text

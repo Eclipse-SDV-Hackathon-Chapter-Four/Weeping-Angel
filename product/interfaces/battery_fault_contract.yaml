@@ -32,6 +32,27 @@ guardian_evidence_event:
     - residual
     - utilization
 
+# Fault-level change published by the Guardian over uProtocol (ADR-007).
+# Mirrors every Failed/Passed change reported to the DFM; JSON payload on
+# topic //guardian/1001/1/8001. fault_id values come from
+# guardian_diagnostics.json, detection_class from the DetectionClass enum.
+guardian_fault_event:
+  uri: //guardian/1001/1/8001
+  payload_format: UPAYLOAD_FORMAT_JSON
+  required:
+    - fault_id
+    - detection_class
+    - stage            # Failed | Passed
+    - baseline         # true only for the startup all-clear baseline
+    - sovd_path
+    - source           # entity, ecu, domain, sw_component, instance
+    - evidence         # empty object for baseline / clears without data
+  evidence_optional:
+    - signal
+    - observed
+    - limit
+    - residual
+
 # Authoritative injection-side record emitted by the campaign/Fault Generator.
 # injected_class and mutations are copied from the executed injection instance
 # in fault_injection_model.yaml; they are never inferred by the Guardian.

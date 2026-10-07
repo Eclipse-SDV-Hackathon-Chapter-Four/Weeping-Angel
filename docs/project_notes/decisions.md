@@ -148,3 +148,26 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Continuous-model warnings carry residual and utilization for later Evidence Collector integration without changing the DFM catalog.
 - ✅ Valid hot samples and absolute-limit violations remain independently observable, and fault-injection ground truth remains separate.
 - ❌ The demonstrator has no hysteresis; values oscillating around thermal or utilization thresholds can produce repeated state transitions.
+
+### ADR-007: Guardian mirrors DFM fault changes as uProtocol events (2026-10-07)
+
+**Context:**
+- ADR-005 made the DFM reporter the sole reporting path, but the challenge README requires fault events to be exchanged over uProtocol.
+- Consumers on the bus (Evidence Collector, mitigation) need the same fault truth as the DFM, without a separate mapping that could drift.
+
+**Decision:**
+- Amends ADR-005 (on top of ADR-006): the Guardian publishes every fault-level change it reports to the DFM also as JSON `GuardianFaultEvent` on uProtocol topic `//guardian/1001/1/8001`. The DFM stays the diagnostic truth (SOVD); no second catalog or mapping is introduced.
+- The ADR-006 class/level → fault projection and aggregation (`Failed` while ≥ 1 signal active) live once in `guardian_faults.rs`; DFM and uProtocol consume the same `FaultEvent`. Unmapped detections (e.g. utilization warnings) are published on neither channel.
+- Both channels are independent: neither waits for the other, a missing DFM or failing Zenoh send only drops/logs on its own channel.
+- Only transitions are published, plus the one-shot startup all-clear baseline (`baseline: true`); no periodic re-publication.
+
+**Alternatives Considered:**
+- Publish from inside the DFM worker → Rejected: the worker blocks until the DFM is up, coupling bus events to DFM availability.
+- Publish raw signal-level detections → Rejected: bus and DFM would report different facts.
+- Periodic state re-publication for late subscribers → Rejected for now: transitions only; late joiners use DFM/SOVD or `/state`.
+
+**Consequences:**
+- ✅ One aggregation, two independent sinks with identical fault ids (`fault_key`).
+- ✅ Bus consumers get structured numeric evidence (DFM env data stays string-formatted, max 8 entries).
+- ❌ Subscribers that join after a transition miss it (no retain on Zenoh publish).
+- ❌ Unbounded publish queue: a permanently stalled transport grows memory (transition rate is low).
