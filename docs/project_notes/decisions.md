@@ -243,14 +243,15 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 **Decision:**
 - v1 delivers the single-host flow in parallel branches: the VSS Publisher sends `BatteryTempEvent` to both Guardian and Evidence Collector; the Guardian publishes every internal detection transition unchanged as `GuardianEvidenceEvent` to the Evidence Collector and separately projects configured detections into DFM; DFM continues through OpenSOVD to the Evidence Collector.
 - openDuT (campaign supervisor) and Ankaios are specified but not implemented in v1.
-- The transport-fault injection mechanism remains open.
+- In v1, `transport.delay` and `transport.drop` refer to the ASC/CAN replay path before the CAN Provider. The Case Mutator changes ASC replay timing or omits CAN frames while preserving embedded source timestamps. No Toxiproxy or uProtocol-network fault injector is used.
 
 **Alternatives Considered:**
 - Attempt openDuT/Ankaios in v1 → Rejected: dilutes the evidence path.
-- Freeze the transport-fault mechanism now → Rejected: options still under review.
+- Inject faults on the uProtocol/Zenoh link with Toxiproxy → Rejected for the product harness: no such proxy is part of the product setup, and the CAN replay artifact already provides deterministic delay/drop injection.
 
 **Consequences:**
 - ✅ Focused v1; later phases have a documented place in the interface spec.
+- ✅ Transport experiments are pre-generated, inspectable, and replayable without a live proxy.
 - ❌ DoD 7/8 not met in v1 (documented only).
 
 ### ADR-011: Product CAN FD frame carries the source timestamp explicitly (amends ADR-008) (2026-10-07)
@@ -413,10 +414,17 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
 **Decision:**
 - The harness uses five version-controlled, 20-second reference scenarios at the nominal 100-ms battery-message cycle: `cold_nominal`, `warm_nominal`, `hot_nominal`, `overtemp_fault`, and `hotspot_fault`.
+- Every committed Golden ASC has same-prefix `.ground_truth.yaml` and `.oracle.yaml` sidecars. Ground truth is empty because no incident is injected; the Oracle carries exact expected Guardian transitions. `validation.json` is only a derived per-frame review summary. The trajectories are deterministic and contain no random noise. `hot_nominal` deliberately carries a Thermal Warning throughout; the two genuine-fault traces are positive regressions and need not clear before replay end.
 - Initial elementary-fault campaigns use the three nominal scenarios as mutation templates. The two genuine-fault scenarios run unmodified as positive regression experiments; combined faults based on them require a later explicit specification.
-- One campaign represents one canonical injected fault class. For each applicable reference scenario it pre-generates one experiment ASC containing five temporally separated incidents of that class, with recovery intervals sufficient to observe both activation and clearing.
+- One campaign represents one canonical injected fault class. Seven elementary campaigns run on the three nominal scenarios; `signal.combination` is configured separately, initially once on `warm_nominal`, for 22 experiments total. Each experiment ASC contains five temporally separated incidents of its class, with recovery intervals sufficient to observe both activation and clearing.
 - Each incident has independent injection ground truth and Guardian/DFM expectations. Different incident strengths test meaningful boundaries and levels, but a `WARNING` expectation is used only for Guardian rules that define warning semantics. Binary rules never acquire synthetic warning levels.
 - Generation and execution remain separate phases. Generation emits the ASC replay, ground truth, and oracle before system execution. A future runner resets the system, starts evidence capture, replays exactly one experiment, allows a drain period, and produces a tri-state `PASS` / `FAIL` / `INCONCLUSIVE` verdict.
+- Harness configuration is split into one small root file, one compact default-campaign file, and explicit files for combined campaigns. Default frequency and strength variation use abstract generation goals; executed numeric values remain model-derived and are recorded in ground truth.
+- Every experiment uses the common `case` prefix (`case.asc`, `case.ground_truth.yaml`, `case.oracle.yaml`) and stores Collector output below its `evidence/` directory, matching the Evidence Collector's existing prefix interface without path reconstruction.
+- The standard five-case variation is class-specific: utilization points for Spike and Drift, duration/window boundaries for Stuck, legal/illegal envelope boundaries for Out-of-range, and 400/500/700/1000/2000-ms receive gaps for Delay, Drop, and Source Dropout. Even scheduling reserves 0-1 s for lead-in, five 3.5-s incident/recovery slots, and 18.5-20 s for final drain.
+- The v1 runner is a Python process inside the DevContainer, not another harness container. Every experiment restarts the stateful path and uses fresh DFM storage. Readiness is condition-based, the Collector starts before replay, terminal battery evidence plus replay-process success define completion, and the default post-replay drain is 3 s.
+- Evidence matching uses exact source timestamps for battery input, 100-ms right-hand slack for Guardian decisions, and 500-ms right-hand slack for DFM projection. Unmapped Guardian decisions are `NOT_APPLICABLE` on the DFM plane. Campaign execution continues after isolated infrastructure failures, recording them as `INCONCLUSIVE`.
+- Runtime evidence is retained under a unique `evidence/<run-id>/` directory as Collector JSON, normative verdict JSON, derived Markdown, process logs, and fresh per-run DFM storage; existing run directories are never overwritten.
 - Campaign artifacts do not contain model hashes, configuration hashes, trace hashes, artifact hashes, or a dedicated provenance file. Stable IDs, explicit paths, committed specifications, and the generated artifacts themselves provide the required traceability.
 - The detailed harness contract, decided points, and open questions live in `product/doc/testing/battery_campaign_test_harness.md`.
 

@@ -12,7 +12,7 @@ Never store credentials here — this file is committed to git.
 - Demo app: `demo/` — self-documenting via `demo/README.md`, `demo/docs/README.md`, `demo/tutorial.md`
 - Idea input (no authority over ADRs, see `decisions.md` ADR-002): `PLAN.md`
 - Build environment: root Nix flake (`nix develop`); build through the devshell, not the user nix profile
-- One-command evidence run: `demo/scripts/run_demo.sh` (needs Toxiproxy binaries in `demo/.tools/`, not committed)
+- Legacy demo evidence run: `demo/scripts/run_demo.sh`; its Toxiproxy-based transport scenario is historical and is not part of the product harness
 
 ## uProtocol Topics (over Zenoh; `up-rust` + `up-transport-zenoh`)
 
@@ -63,16 +63,24 @@ Never store credentials here — this file is committed to git.
 - Supports all canonical v1 classes: stuck, spike, drift, out-of-range, signal combination, transport delay/drop, and source dropout
 - Emits mutated ASC, independent injection ground truth, and a Guardian test-oracle sidecar; impossible goals produce structured `UNSATISFIABLE`
 - Preserves non-target ASC lines byte-exactly and never rebases embedded source timestamps on drop; transport delay changes replay time while preserving generation time
+- Product transport delay/drop operate on the ASC/CAN replay path before the CAN Provider; no Toxiproxy or Zenoh-link mutation is used
 - Current Rust tests pass 6 unit tests and 5 end-to-end generation tests; the current checkout still needs `cargo fmt` before the complete `make check` is green
 
 ## Battery Campaign Test Harness
 
 - Normative discussion specification: `product/doc/testing/battery_campaign_test_harness.md`; CAN FD replay contract: `product/doc/can/battery_can_fd_replay.md`
 - Five version-controlled 20-second reference scenarios at the nominal 100-ms cycle: three nominal operating states (`cold_nominal`, `warm_nominal`, `hot_nominal`) and two genuine fault states (`overtemp_fault`, `hotspot_fault`)
+- Golden trajectories are deterministic committed ASC data with same-prefix Ground Truth and Oracle YAMLs. Ground Truth is empty because nothing is injected; Oracle YAMLs carry the exact expected transitions, including recurring Overtemp Rate warnings. `validation.json` is a derived review summary. Hot nominal intentionally carries a Thermal Warning, while the two genuine-fault regressions may remain active at replay end
 - Initial elementary-fault campaigns mutate only the three nominal scenarios; the two fault scenarios are unmodified positive regression runs until combined-fault testing is explicitly specified
-- One campaign represents one canonical injected fault class; each generated experiment ASC contains five separated incidents of that class with explicit recovery intervals and per-incident expectations
+- Seven elementary campaigns run across the three nominal scenarios, plus one initially configured combined campaign on `warm_nominal`, for 22 experiments; each experiment contains five separated incidents with explicit recovery and expectations
+- Standard variation is class-specific and uses five fixed positions; even scheduling provides a 1-s lead-in, five 3.5-s incident/recovery slots, and a 1.5-s final drain
 - Warning expectations are valid only for Guardian checks that define warnings; binary checks use subthreshold/boundary/violation-style cases rather than inventing warning levels
 - The harness pre-generates experiment bundles containing the ASC replay, injection ground truth, and oracle. No hash or provenance artifact is generated
+- Harness source configuration lives in `product/config/battery_campaign`: `harness.yaml` selects scenarios and campaign files, `default_campaigns.yaml` expresses frequency and variation compactly, and explicit combined campaigns list their individual incidents
+- Experiment bundles share the Collector-compatible `case` prefix and keep runtime results in an `evidence/` subdirectory
+- The v1 campaign runner is Python inside the DevContainer. Each experiment restarts the stateful chain, uses fresh DFM storage, waits for machine-readable readiness, starts the Collector before replay, and drains evidence for 3 s after confirmed replay completion
+- Evidence timing uses exact battery source timestamps, 100-ms Guardian slack, and 500-ms DFM projection slack. Infrastructure failures are `INCONCLUSIVE`; campaign execution continues by default
+- Every execution gets a unique `evidence/<run-id>/` directory containing Collector JSON, normative `verdict.json`, derived `report.md`, logs, and DFM state; existing runs are not overwritten
 - Future execution runs one experiment at a time and correlates battery input, raw Guardian decisions, and DFM/OpenSOVD evidence; verdicts are `PASS`, `FAIL`, or `INCONCLUSIVE`
 
 ## Evidence Collector
@@ -93,7 +101,7 @@ Never store credentials here — this file is committed to git.
 - `battery_temp_with_ts.asc` starts source time at 0 ms; value mutation and frame deletion preserve all remaining embedded timestamps unchanged
 - Temperature and SoC quantization are 0.5 °C and 0.5 pp; nominal generation period is 100 ms
 
-## Ports (demo)
+## Ports (legacy demo)
 
 - 7447 Zenoh (uProtocol bus) · 7448 Toxiproxy(zenoh) · 7690 OpenSOVD gateway · 8080 Guardian HTTP (`/health`, `/state`) · 8474 Toxiproxy API · 55555 kuksa-databroker
 

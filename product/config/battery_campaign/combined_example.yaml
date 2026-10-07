@@ -1,0 +1,31 @@
+schema_version: 1
+
+campaign:
+  id: combined_example
+  scenario: warm_nominal
+
+incidents:
+  - at_ms: 2000
+    combine:
+      - { fault: signal.stuck, signal: temp_avg, strength: medium }
+      - { fault: signal.spike, signal: temp_max, strength: high }
+
+  - at_ms: 5500
+    combine:
+      - { fault: signal.drift, signal: temp_max, strength: low }
+      - { fault: signal.spike, signal: temp_min, strength: medium }
+
+  - at_ms: 9000
+    combine:
+      - { fault: signal.out_of_range, signal: temp_min, strength: low }
+      - { fault: signal.stuck, signal: temp_avg, strength: high }
+
+  - at_ms: 12500
+    combine:
+      - { fault: signal.drift, signal: temp_min, strength: medium }
+      - { fault: signal.spike, signal: temp_avg, strength: high }
+
+  - at_ms: 16000
+    combine:
+      - { fault: signal.stuck, signal: temp_min, strength: low }
+      - { fault: signal.out_of_range, signal: temp_max, strength: high }

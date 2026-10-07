@@ -183,9 +183,9 @@ Signal Out Of Range Is Detected
 Transport Delay Raises Stream Stale
     [Documentation]    Delay beyond the freshness deadline is observable as STREAM_STALE; Guardian cannot prove transport.delay as root cause.
     [Tags]    inject:transport.delay    detect:STREAM_STALE    owner:guardian    ambiguous-root-cause
-    Inject Transport Delay
+    Inject Scenario    transport_delay
     Wait For Active Faults    ${F_STREAM_STALE}    timeout=15
-    Record Scenario    transport.delay    Zenoh delay beyond freshness deadline
+    Record Scenario    transport.delay    CAN replay delay beyond freshness deadline
     ...    ${F_STREAM_STALE}    PASS
 
 Transport Drop Raises Stream Stale

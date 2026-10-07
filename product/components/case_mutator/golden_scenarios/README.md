@@ -3,6 +3,16 @@
 All scenarios contain exactly 200 CAN FD battery frames at 10 Hz (20 s).
 Frame ID `0x100`, DLC code `0xA`, data length 16, BRS=0, ESI=0.
 
+Every ASC has two YAML sidecars with the same prefix:
+
+- `<prefix>.ground_truth.yaml` is `[]` because Golden Scenarios contain no
+  injected incident;
+- `<prefix>.oracle.yaml` contains the exact expected Guardian transitions.
+
+`validation.json` is a derived per-frame summary for review. The Oracle YAML is
+the Evidence Collector input, including recurring Rate transitions in the
+Overtemp scenario.
+
 ## Model-validation result
 
 ### `0_cold_nominal.asc`

@@ -1,0 +1,11 @@
+schema_version: 1
+scenario_id: hot_nominal
+source_window_ms: { start: 0, end: 19900 }
+
+guardian:
+  allow_unspecified: false
+  transitions:
+    - { at_ms: 0, class: THERMAL_LIMIT, level: WARNING, state: active, signal: temp_max }
+
+dfm:
+  derive_from: product/config/battery_guardian/guardian_diagnostics.json

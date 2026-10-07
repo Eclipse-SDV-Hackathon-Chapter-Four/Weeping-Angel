@@ -788,9 +788,10 @@ conservative (for example 1 s).
 The stale check uses the receive axis ($\Delta t^{\mathrm{recv}}$, projected
 relative now), never the source/generation interval $\Delta\tau$.
 
-A pure transport delay must preserve source-generation timestamps while
-delaying receipt. ASC timestamp retiming alone changes generation time and must
-not be mislabeled as pure transport delay.
+A pure transport delay changes the ASC record timestamp, which controls CAN
+replay/delivery time, while preserving the embedded payload `TimeStamp`, which
+is the source-generation time. Changing the payload timestamp would instead
+change generation time and must not be mislabeled as transport delay.
 
 ---
 

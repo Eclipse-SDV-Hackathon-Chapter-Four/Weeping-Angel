@@ -1,0 +1,10 @@
+schema_version: 1
+scenario_id: cold_nominal
+source_window_ms: { start: 0, end: 19900 }
+
+guardian:
+  allow_unspecified: false
+  transitions: []
+
+dfm:
+  derive_from: product/config/battery_guardian/guardian_diagnostics.json
