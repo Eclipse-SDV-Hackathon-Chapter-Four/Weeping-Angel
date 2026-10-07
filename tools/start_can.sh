@@ -4,7 +4,7 @@
 # Runs in the foreground and stops the provider once the replay is done
 # (the provider itself keeps running after a single pass).
 #
-#   product/components/start_can.sh <file.asc>
+#   tools/start_can.sh <file.asc>
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
