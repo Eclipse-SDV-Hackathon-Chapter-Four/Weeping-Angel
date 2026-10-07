@@ -9,7 +9,7 @@ flowchart
     %% =========================================================
 
     subgraph FI["Fault Injection"]
-        direction TB
+        direction LR
 
         MUTATOR["CASE Mutation"]
 
@@ -26,7 +26,7 @@ flowchart
     %% =========================================================
 
     subgraph VG["Vehicle Gateway"]
-        direction LR
+        direction TB
 
         KUKSA_CAN["KUKSA CAN Provider"]
         KUKSA_DB["KUKSA Data Broker"]
@@ -35,14 +35,15 @@ flowchart
         KUKSA_CAN -->|"Socket CAN"| KUKSA_DB
         KUKSA_DB -->|"gRPC VSS"| VSS
     end
-
+    
+    VSS -->|"uProtocol"| GUARDIAN
 
     %% =========================================================
     %% Diagnostic / Fault Handling
     %% =========================================================
 
     subgraph DIAG["Diagnostic / Fault Handling"]
-        direction TB
+        direction LR
 
         ZENOH["ZENOH Daemon"]
         GUARDIAN["Guardian"]
@@ -63,7 +64,7 @@ flowchart
 
     ASC -->|"open()"| KUKSA_CAN
 
-    VSS -->|"uProtocol"| GUARDIAN
+
 
     ZENOH -->|"TCP/IP, BPM"| VSS
 
