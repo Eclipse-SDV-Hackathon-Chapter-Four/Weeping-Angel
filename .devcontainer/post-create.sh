@@ -2,8 +2,7 @@
 set -euo pipefail
 
 # Guardian build dependency; idempotent for already initialized worktrees.
-git submodule update --init product/components/fault-lib
-git submodule update --init product/components/kuksa-can-provider
+git submodule update --init --recursive
 
 # Python venv for the evidence collector / Robot Framework (kept outside the repo tree).
 python3 -m venv "$HOME/.venv"

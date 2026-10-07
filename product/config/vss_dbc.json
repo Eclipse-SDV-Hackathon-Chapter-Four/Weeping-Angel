@@ -1,15 +1,19 @@
 {
   "Vehicle": {
     "type": "branch",
+    "description": "...",
     "children": {
       "Powertrain": {
         "type": "branch",
+        "description": "...",
         "children": {
           "TractionBattery": {
             "type": "branch",
+            "description": "...",
             "children": {
               "Temperature": {
                 "type": "branch",
+                "description": "...",
                 "children": {
                   "Average": {
                     "datatype": "float",
@@ -48,6 +52,7 @@
               },
               "StateOfCharge": {
                 "type": "branch",
+                "description": "...",
                 "children": {
                   "Current": {
                     "datatype": "float",
