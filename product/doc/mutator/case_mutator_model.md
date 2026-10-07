@@ -69,7 +69,8 @@ ASC replay -> KUKSA CAN provider -> Databroker -> VSS bridge
                            \-> DFM -> OpenSOVD ------------> Evidence Collector
 ```
 
-The mutator operates on CAN frame `0x100`, DLC 8, containing:
+The mutator operates on timestamped CAN frame `0x100`, DLC 16, containing a
+little-endian 32-bit source-generation timestamp followed by:
 
 ```text
 temp_min
@@ -77,6 +78,9 @@ temp_avg
 temp_max
 soc
 ```
+
+The remaining four payload bytes are reserved. The mutator preserves them
+unchanged and does not interpret them.
 
 All non-target ASC content must remain byte-identical unless a temporal mutation
 explicitly changes the timeline.
@@ -90,6 +94,7 @@ Each generation request contains:
 ```yaml
 template: <reference.asc>
 battery_model: product/config/battery_guardian/guardian_model.yaml
+started_at: <campaign start, ISO-8601>
 injection_id: <stable id>
 injected_class: <canonical injected fault class>
 mutations: [...]
@@ -1002,7 +1007,7 @@ stuck window / excitation cases
 For each case:
 
 1. parse the reference ASC;
-2. collect battery frames `0x100`, DLC 8;
+2. collect timestamped battery frames `0x100`, DLC 16;
 3. preserve the configured lead-in byte-identically;
 4. load and hash the exact Guardian model;
 5. load the injection instance;

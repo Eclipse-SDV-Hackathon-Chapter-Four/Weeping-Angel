@@ -1,0 +1,16 @@
+template: ../../config/battery_temp_with_ts.asc
+battery_model: ../../config/battery_guardian/guardian_model.yaml
+fault_injection_model: ../../config/battery_guardian/fault_injection_model.yaml
+run_id: example-transport-drop
+started_at: 2026-10-07T00:00:00Z
+injection_id: transport_drop
+injected_class: transport.drop
+generation_goal:
+  primary:
+    - class: STREAM_STALE
+      level: VIOLATION
+  allowed: []
+  forbidden: []
+  allow_unspecified_codetections: false
+seed: 0
+lead_in_frames: 20

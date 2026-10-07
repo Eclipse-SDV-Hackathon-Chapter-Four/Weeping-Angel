@@ -86,7 +86,7 @@ pub struct SocCouplingConfig {
 pub struct SocConfig {
     pub min_percent: f32,
     pub max_percent: f32,
-    pub max_step_pp: f32,
+    pub max_rate_pp_per_s: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -194,7 +194,7 @@ impl GuardianConfig {
         if self.soc.min_percent >= self.soc.max_percent {
             bail!("soc.min_percent must be less than soc.max_percent");
         }
-        require_positive("soc.max_step_pp", self.soc.max_step_pp)?;
+        require_positive("soc.max_rate_pp_per_s", self.soc.max_rate_pp_per_s)?;
 
         if self.stuck.window_samples < 2 {
             bail!("stuck.window_samples must be at least 2");
@@ -318,6 +318,18 @@ mod tests {
 
         let zero_rate_cap = CONFIG.replace("rate_cap_pp_per_s: 2.0", "rate_cap_pp_per_s: 0.0");
         assert!(GuardianConfig::from_yaml_str(&zero_rate_cap).is_err());
+    }
+
+    #[test]
+    fn soc_rate_limit_must_be_positive() {
+        let yaml = CONFIG.replace("max_rate_pp_per_s: 5.0", "max_rate_pp_per_s: 0.0");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
+    }
+
+    #[test]
+    fn obsolete_soc_step_key_is_rejected() {
+        let yaml = CONFIG.replace("max_rate_pp_per_s: 5.0", "max_step_pp: 0.5");
+        assert!(GuardianConfig::from_yaml_str(&yaml).is_err());
     }
 
     #[test]

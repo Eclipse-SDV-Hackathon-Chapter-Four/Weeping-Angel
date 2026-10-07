@@ -37,13 +37,14 @@ Never store credentials here — this file is committed to git.
 - DFM catalog: `product/config/battery_guardian/guardian_diagnostics.json`; consumed by the existing Guardian DFM reporter
 - Injection model: `product/config/battery_guardian/fault_injection_model.yaml`; canonical signals are `temp_min`, `temp_avg`, `temp_max`, and `soc`
 - Supported injected classes: `transport.delay`, `transport.drop`, `source.dropout`, `signal.stuck`, `signal.spike`, `signal.drift`, `signal.out_of_range`, and `signal.combination`
-- Decided input contract: BatteryTempEvent on `battery-vss/9001/1/9001` carries `temp_min`, `temp_avg`, `temp_max`, `soc`, and the original CAN generation `timestamp_ms`; timestamps are integer milliseconds starting at 0 and must be preserved unchanged from source to uProtocol (ADR-008; implementation pending)
+- Decided input contract: BatteryTempEvent on `battery-vss/9001/1/9001` carries `temp_min`, `temp_avg`, `temp_max`, `soc`, and the original CAN generation `timestamp_ms`; timestamps are integer milliseconds starting at 0 and must be preserved unchanged from the timestamped product frame to uProtocol (ADR-008/ADR-011; bridge implementation pending)
 - Target Guardian timing: local monotonic receive time remains authoritative for temperature-rate and staleness checks; source `timestamp_ms` is retained for identity, evidence correlation, and transport-drop detection from unexpected gaps in the expected generation cadence, without replacing the receive-time model base
 - Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once (ADR-004)
 - Guardian observations are `DetectionClass × DetectionLevel`: class identifies the model rule; level is `WARNING`, `VIOLATION`, or `CRITICAL`
 - Thermal observation: `THERMAL_LIMIT / WARNING` from 60 °C to below 70 °C and `THERMAL_LIMIT / CRITICAL` from 70 °C; the warning threshold is derived from `absolute_max_c - warning_margin_c`
 - Continuous checks: spread, hotspot, and temperature rate emit `WARNING` from 80% through 100% utilization and `VIOLATION` above the model limit; utilization and residual are retained
-- Binary checks: stream stale; absolute temperature and ordering; SoC range/step; excitation-gated stuck signals emit `VIOLATION` only
+- Binary checks: stream stale; absolute temperature and ordering; SoC range/rate; excitation-gated stuck signals emit `VIOLATION` only
+- SoC rate limit: 5 pp/s using actual elapsed receive time; the obsolete fixed `max_step_pp` rule has been removed
 - Guardian evidence stream (decided target): every internal `Detection` transition, including unmapped utilization warnings, is published unchanged to the Evidence Collector as `GuardianEvidenceEvent`; it contains class/level, active/cleared state, signal, and available observed/limit/residual/utilization evidence, without requiring a DFM fault ID (ADR-007)
 - DFM reporting: independently projects only configured class/level pairs and may aggregate signal-level detections; thermal warning/critical retain `BatteryOverTempWarning`/`BatteryOverTempCritical`, while continuous-model warnings have no DFM fault
 - Current implementation gap: `guardian_faults.rs` aggregates mapped detections into `Failed`/`Passed` changes and sends those independently to DFM and as mapped `GuardianFaultEvent` messages on `guardian/1001/1/8001`; ADR-007 requires this uProtocol path to be replaced by, or separated from, the raw decision stream
@@ -52,7 +53,17 @@ Never store credentials here — this file is committed to git.
 - Dev-container workflow: `make test`, `make check`, and `make run` from the component directory invoke Cargo directly; the repository-mounted `target/` and Cargo home provide the caches
 - The shared `.devcontainer` initializes the Guardian's `fault-lib` submodule, installs rustfmt and Clippy, preinstalls the Codex VS Code extension, and forwards Guardian HTTP port 8080
 - `make check` also validates the canonical injection model and runs its malformed-configuration tests
-- Verification on 2026-10-07: dev-container `make check` passed formatting, Clippy with warnings denied, all 37 Rust tests, injection-model validation, and all 10 validator tests
+- Verification on 2026-10-07: dev-container `make check` passed formatting, Clippy with warnings denied, all 49 Rust tests, injection-model validation, and all 10 validator tests
+
+## Product Case Mutator
+
+- Component: `product/components/case_mutator/`; Rust binary `case-mutator`
+- Reads an explicit generation request, the canonical fault-injection instance and the exact `guardian_model.yaml`; records the model SHA-256 in every case
+- Uses the real `battery-guardian` Rust model/runtime as its forward oracle rather than maintaining a second detection implementation
+- Supports all canonical v1 classes: stuck, spike, drift, out-of-range, signal combination, transport delay/drop, and source dropout
+- Emits mutated ASC, independent injection ground truth, and a Guardian test-oracle sidecar; impossible goals produce structured `UNSATISFIABLE`
+- Preserves non-target ASC lines byte-exactly and never rebases embedded source timestamps on drop; transport delay changes replay time while preserving generation time
+- Dev-container `make check` passes formatting, Clippy with warnings denied, 4 unit tests and 5 end-to-end generation tests
 
 ## Evidence Collector
 
@@ -63,9 +74,14 @@ Never store credentials here — this file is committed to git.
 ## CAN Assets (`demo/can/`)
 
 - Frame 0x100 (256) `BatteryTemperature`, 8 bytes, 100 ms cycle: CellTempAvg (bits 0–15), CellTempMax (16–31), CellTempMin (32–47), StateOfCharge (48–63); scale 0.5, offset −40 (SoC offset 0)
-- Each generated battery CAN message has a source-relative `timestamp_ms` beginning at 0; it is message metadata rather than an additional signal in the full 8-byte DBC payload and is preserved into BatteryTempEvent (ADR-008)
 - `battery_temp.asc` = Vector ASC replay input for kuksa-can-provider `--dumpfile`
 - `vss_dbc.json` maps signals to `Vehicle.Powertrain.TractionBattery.*` (interval 100 ms)
+
+## Product CAN Assets (`product/config/`)
+
+- Frame 0x100 `BatteryTemperature` is the timestamped 16-byte product frame: little-endian 32-bit `TimeStamp`, four little-endian 16-bit battery signals, and four reserved bytes preserved unchanged (ADR-011)
+- `battery_temp_with_ts.asc` starts source time at 0 ms; value mutation and frame deletion preserve all remaining embedded timestamps unchanged
+- Temperature and SoC quantization are 0.5 °C and 0.5 pp; nominal generation period is 100 ms
 
 ## Ports (demo)
 

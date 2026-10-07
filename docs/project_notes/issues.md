@@ -43,9 +43,9 @@ is not authoritative) — they do not become open issues here.
 - **Notes**: ADR-004/007/008/009/010 and key facts now define the three evidence planes. Implementation still needs to replace bridge wall-clock timestamps, retain the source timestamp in the Guardian, use source-timestamp gaps for drop detection, define the raw GuardianEvidenceEvent URI/RID and payload contract, publish all detection transitions before DFM mapping, and add the Evidence Collector subscriptions.
 
 ### 2026-10-07 - Reconcile Case Mutator specification with Guardian model
-- **Status**: In Progress
-- **Description**: Updated the mutator specification to consume and validate the canonical Guardian model, record its content hash, use shared conformance vectors, and reflect source timestamps plus the three Evidence Collector views.
-- **Notes**: Corrected stale timeout, rate-boundary, stuck-target and combination wording without changing model semantics. Open decisions remain for mutation-layer attribution, ground-truth time bases, timestamp-gap detection output, executable classes not present in the injection vocabulary, and the conflicting SoC step/rate definitions.
+- **Status**: Resolved
+- **Description**: Implemented the Rust Case Mutator under `product/components/case_mutator` with bounded inverse search, quantization, real Guardian forward verification, ASC rendering, ground truth, oracle output, and structured unsatisfiable results.
+- **Notes**: All eight canonical v1 injections are covered by end-to-end generation tests. The Guardian and canonical configuration now use the specified 5 pp/s receive-time SoC rate. Product frame 0x100 is aligned as a timestamped 16-byte frame with a little-endian timestamp under ADR-011. Component and Guardian `make check` both pass in the dev container.
 
 ### 2026-10-06 - Component & channel specification (product/doc/architecture)
 - **Status**: In Progress

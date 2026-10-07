@@ -1,0 +1,22 @@
+[package]
+name = "case-mutator"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "source/lib.rs"
+
+[[bin]]
+name = "case-mutator"
+path = "source/main.rs"
+
+[dependencies]
+anyhow = "1"
+battery-guardian = { path = "../guardien" }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
