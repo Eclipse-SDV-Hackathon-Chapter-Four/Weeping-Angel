@@ -16,3 +16,8 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 
 Observations against demo artifacts are informational only (ADR-003: the demo
 is not authoritative) — they do not become open issues here.
+
+### 2026-10-06 - Implement physical-model Battery Guardian
+- **Status**: Resolved
+- **Description**: Added the standalone product Guardian under `product/components/guardien` with validated YAML configuration, periodic receive-time evaluation, typed detections, and a dummy reporter.
+- **Notes**: Added a cached Docker/Make workflow; `make check` passes formatting, Clippy, and all 23 tests. Final DFM/Evidence Collector reporting remains intentionally out of scope.

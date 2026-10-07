@@ -27,6 +27,20 @@ Never store credentials here — this file is committed to git.
 - Stuck: ≥ 5 consecutive identical samples; stale: no sample for 2000 ms (watchdog polls every 500 ms)
 - States: Clear/Monitoring/Warning/Critical — `Mitigating` defined in the enum but never entered; Guardian state not published over uProtocol
 
+## Product Guardian
+
+- Component: `product/components/guardien/` (directory spelling is intentional in the current layout)
+- Rust crate: `Cargo.toml`; source files live in `source/`; binary name is `guardian`
+- Configuration: `product/components/guardien/config/battery_guardian.yaml`; startup fails on missing or inconsistent mandatory parameters
+- Input: existing BatteryTempEvent uProtocol URI `battery-vss/9001/1/9001`; listener stores `temp_min`, `temp_avg`, `temp_max`, `soc`, and local receive time only
+- Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once (ADR-004)
+- Detections: stream stale; absolute temperature, ordering, spread, hotspot and temperature-rate violations; SoC range/step violations; excitation-gated stuck signals
+- Reporting: one dummy `report_detection` function; DFM/Evidence Collector integration intentionally deferred
+- HTTP: port 8080 by default, `/health` and `/state`
+- Container workflow: `make test`, `make check`, and `make run` from the component directory; persistent Docker volumes cache Cargo registry/git data and `target/`
+- Development image: `battery-guardian-dev:local`, built from `Dockerfile.dev` with rustfmt and Clippy
+- Verification on 2026-10-06: `make check` passed (format, Clippy with warnings denied, 23 tests)
+
 ## CAN Assets (`demo/can/`)
 
 - Frame 0x100 (256) `BatteryTemperature`, 8 bytes, 100 ms cycle: CellTempAvg (bits 0–15), CellTempMax (16–31), CellTempMin (32–47), StateOfCharge (48–63); scale 0.5, offset −40 (SoC offset 0)

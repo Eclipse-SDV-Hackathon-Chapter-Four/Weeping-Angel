@@ -72,3 +72,27 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Free hand to rebuild the demo (unify stacks, ASC-level injection) without demo-compatibility obligations.
 - ✅ Project memory stays free of demo-sample quirks logged as issues.
 - ❌ Demo code/docs can drift from decisions until reconciled — current decisions live in `decisions.md`, not in `demo/`.
+
+### ADR-004: Guardian uses receive-time periodic evaluation (2026-10-06)
+
+**Context:**
+- ADR-001 selected a future Guardian heartbeat as the time base, but the heartbeat event, URI, and publisher do not exist.
+- The supplied Battery Guardian implementation specification requires the listener to store observations only, a periodic task to evaluate each sample generation at most once, and stream staleness to use elapsed monotonic receive time.
+- The new product implementation lives independently of the non-authoritative threshold-based demo.
+
+**Decision:**
+- The product Guardian uses local monotonic receive timestamps (`Instant`) and a monotonically increasing sample-generation counter.
+- A configurable periodic task evaluates each fresh generation once. It reports `STREAM_STALE` when receive age exceeds the configured timeout and clears it on the next fresh sample.
+- No producer timestamp or sequence number is added to `BatteryTempEvent`; all physical-model parameters come from the Guardian YAML configuration.
+- This receive-time decision supersedes ADR-001's not-yet-implemented heartbeat time base for the product Guardian. ADR-001's decision not to add a sequence number remains in force.
+
+**Alternatives Considered:**
+- Wait for and introduce the heartbeat contract from ADR-001 → Rejected: it blocks the specified Guardian and adds a new interface that the current architecture does not provide.
+- Reuse the demo's threshold/watchdog logic → Rejected: the supplied specification requires a full physical-consistency rewrite and the demo is non-authoritative under ADR-003.
+- Use producer timestamps for temporal checks → Rejected: receive timing must remain monotonic and independent of replay-controlled wall clocks.
+
+**Consequences:**
+- ✅ Listener, periodic scheduling, physical model, and reporting are cleanly separated.
+- ✅ Missing input is detectable without changing CAN, VSS, or uProtocol contracts.
+- ✅ The model is deterministic and unit-testable without Zenoh/uProtocol.
+- ❌ Receive-side staleness identifies the observed symptom only; it cannot distinguish transport delay/drop from source dropout.
