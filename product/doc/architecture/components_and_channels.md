@@ -71,7 +71,7 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 | E16 | C12 → C1…C13 | lifecycle | Ankaios manifest | [DEFERRED] |
 | E17 | C2/C14 → C3 | generated replay | ASC timing changes / omitted CAN FD frames | [DEMO] |
 | E18 | C13 → C2 | process spawn | legacy `fault_injector` (superseded by C2) | [DEMO] |
-| E19 | C10 → Browser | HTTP + SSE | `127.0.0.1:8090`, snapshot + deltas (ADR-016) | [PLANNED] |
+| E19 | C10 → Browser | HTTP + SSE | `0.0.0.0:8090`, snapshot + deltas (ADR-016) | [PLANNED] |
 
 ## 4. Components (short specs)
 
@@ -127,7 +127,7 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **Ambiguity:** `transport.delay`, `transport.drop`, `source.dropout` all → `STREAM_STALE`.
 - **Verdict:** tristate `PASS/FAIL/INCONCLUSIVE`; emits `verdict.json`, renders Markdown.
 - **Collector-only classes:** `DIAGNOSTIC_DFM_WRITE_DELAY`, `DIAGNOSTIC_SOVD_VISIBILITY_PARTIAL`.
-- **Live observer (ADR-016):** feature-flagged module + `--observer`; reads in-process state, serves embedded static SSE frontend on `127.0.0.1:8090` (E19). Read-only, not DoD-critical. Reuses the `battery-guardian` library for static bands and the ADR-013 relative time base. Contract: `product/doc/observer/live_observer.md`.
+- **Live observer (ADR-016):** feature-flagged module + `--observer`; reads in-process state, serves embedded static SSE frontend on `0.0.0.0:8090` (E19). Read-only, not DoD-critical. Reuses the `battery-guardian` library for static bands and the ADR-013 relative time base. Contract: `product/doc/observer/live_observer.md`.
 
 ### C11 — Campaign Supervisor (openDuT) [DEFERRED]
 ### C12 — Ankaios [DEFERRED]
