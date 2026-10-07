@@ -9,11 +9,12 @@ Documentation     Battery Guardian — physical-consistency and fault-campaign e
 ...                  injected_class, run_id, injection_id, injected_at_ms.
 ...
 ...               2) Guardian -> Evidence Collector (independent local evidence)
-...                  The Guardian MUST emit a GuardianEvidenceEvent before/independently of the
-...                  DFM write. Required fields: detection_class, fault_id, state, detected_at_ms,
+...                  The Guardian MUST emit a GuardianEvidenceEvent before/independently of an
+...                  optional DFM write. Required fields: detection_class, detection_level, state, detected_at_ms,
 ...                  temp_min, temp_avg, temp_max, soc; where applicable also observed, limit,
-...                  signal, source_message_id, source_timestamp_ms / sequence.
-...                  The same fault_id/context is written to the DFM for OpenSOVD visibility.
+...                  residual, utilization, signal, source_message_id,
+...                  source_timestamp_ms / sequence. Include fault_id only when a configured
+...                  DetectionClass x DetectionLevel DFM projection exists.
 ...
 ...               3) Evidence Collector
 ...                  Correlates injection ground truth, direct GuardianEvidenceEvent(s), and
@@ -22,22 +23,19 @@ Documentation     Battery Guardian — physical-consistency and fault-campaign e
 ...                  In particular, source dropout, transport drop and sufficiently long transport
 ...                  delay can all appear at the Guardian as STREAM_STALE.
 ...
-...               Guardian detection_class values used by this suite:
-...                 PHYSICAL_TEMP_ABSOLUTE_LIMIT
-...                 PHYSICAL_TEMP_ORDERING
-...                 PHYSICAL_TEMP_SPREAD
-...                 PHYSICAL_TEMP_HOTSPOT
-...                 PHYSICAL_TEMP_RATE
-...                 PHYSICAL_SOC_RANGE
-...                 PHYSICAL_SOC_RATE
-...                 SIGNAL_STUCK
-...                 STREAM_STALE
-...                 STREAM_DUPLICATE          (requires message identity)
-...                 STREAM_REORDERED          (requires source timestamp/sequence)
-...
-...               Collector-only diagnostic classes:
-...                 DIAGNOSTIC_DFM_WRITE_DELAY
-...                 DIAGNOSTIC_SOVD_VISIBILITY_PARTIAL
+...               Guardian observations used by this suite:
+...                 THERMAL_LIMIT / WARNING
+...                 THERMAL_LIMIT / CRITICAL
+...                 PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION
+...                 PHYSICAL_TEMP_ORDERING / VIOLATION
+...                 PHYSICAL_TEMP_SPREAD / WARNING or VIOLATION
+...                 PHYSICAL_TEMP_HOTSPOT / WARNING or VIOLATION
+...                 PHYSICAL_TEMP_RATE / WARNING or VIOLATION
+...                 PHYSICAL_SOC_RANGE / VIOLATION
+...                 PHYSICAL_SOC_RATE / VIOLATION
+...                 SIGNAL_STUCK / VIOLATION
+...                 STREAM_STALE / VIOLATION
+...               Continuous WARNING observations remain internal when no DFM mapping exists.
 ...
 ...               Physical model checked by the Guardian:
 ...                 T_abs_min <= T_min <= T_avg <= T_max <= T_abs_max
@@ -53,7 +51,7 @@ Library           SovdFaultLibrary
 ...                   gateway=%{GATEWAY=http://127.0.0.1:7690}
 ...                   app_id=%{APP_ID=battery_guardian}
 ...                   injector=%{INJECTOR=../target/debug/fault_injector}
-...                   catalog=%{CATALOG=../diagnostics/catalog/battery_guardian.json}
+...                   catalog=%{CATALOG=../config/battery_guardian/guardian_diagnostics.json}
 ...                   report=%{REPORT=../reports/evidence_report.md}
 
 Suite Setup       Opensovd Lists All Catalog Faults    11
@@ -62,17 +60,17 @@ Test Setup        Reset To Clean Baseline
 
 *** Variables ***
 # DFM/OpenSOVD fault IDs. These are Guardian OBSERVATIONS, not injected causes.
+${F_THERMAL_WARNING}     BatteryOverTempWarning
+${F_THERMAL_CRITICAL}    BatteryOverTempCritical
 ${F_TEMP_ABSOLUTE}       BatteryTempAbsoluteLimit
-${F_TEMP_ORDERING}       BatteryTempOrderingViolation
-${F_TEMP_SPREAD}         BatteryTempSpreadViolation
-${F_TEMP_HOTSPOT}        BatteryTempHotspotViolation
-${F_TEMP_RATE}           BatteryTempRateViolation
-${F_SOC_RANGE}           BatterySoCRangeViolation
-${F_SOC_RATE}            BatterySoCRateViolation
-${F_SIGNAL_STUCK}        BatteryTempSignalStuck
-${F_STREAM_STALE}        BatteryStreamStale
-${F_STREAM_DUPLICATE}    BatteryStreamDuplicate
-${F_STREAM_REORDERED}    BatteryStreamReordered
+${F_TEMP_ORDERING}       BatteryTempOrdering
+${F_TEMP_SPREAD}         BatteryTempSpread
+${F_TEMP_HOTSPOT}        BatteryTempHotspot
+${F_TEMP_RATE}           BatteryTempRate
+${F_SOC_RANGE}           BatterySocRange
+${F_SOC_RATE}            BatterySocRate
+${F_SIGNAL_STUCK}        BatterySignalStuck
+${F_STREAM_STALE}        BatteryTempStreamStale
 
 *** Test Cases ***
 # -----------------------------------------------------------------------------
@@ -198,22 +196,6 @@ Transport Drop Raises Stream Stale
     Record Scenario    transport.drop    Sustained transport message loss
     ...    ${F_STREAM_STALE}    PASS
 
-Transport Duplicate Is Detected From Message Identity
-    [Documentation]    Requires a stable source_message_id (or equivalent sequence identity). Equal payload values alone are insufficient.
-    [Tags]    inject:transport.duplicate    detect:STREAM_DUPLICATE    owner:guardian    requires:message-identity
-    Inject Scenario    transport_duplicate
-    Wait For Active Faults    ${F_STREAM_DUPLICATE}    timeout=15
-    Record Scenario    transport.duplicate    Same source message delivered more than once
-    ...    ${F_STREAM_DUPLICATE}    PASS
-
-Transport Reorder Is Detected From Source Order
-    [Documentation]    Requires monotonic source timestamp or sequence number; receive time alone cannot establish reordering.
-    [Tags]    inject:transport.reorder    detect:STREAM_REORDERED    owner:guardian    requires:source-order
-    Inject Scenario    transport_reorder
-    Wait For Active Faults    ${F_STREAM_REORDERED}    timeout=15
-    Record Scenario    transport.reorder    Source messages delivered out of source order
-    ...    ${F_STREAM_REORDERED}    PASS
-
 # -----------------------------------------------------------------------------
 # Source faults
 # -----------------------------------------------------------------------------
@@ -225,30 +207,6 @@ Source Dropout Raises Stream Stale
     Wait For Active Faults    ${F_STREAM_STALE}    timeout=15
     Record Scenario    source.dropout    Publisher stops producing fresh samples
     ...    ${F_STREAM_STALE}    PASS
-
-Source Replay Interruption Raises Stream Stale
-    [Documentation]    Replay source stops/interruption occurs. Without an upstream source heartbeat this collapses to STREAM_STALE.
-    [Tags]    inject:source.replay_interruption    detect:STREAM_STALE    owner:guardian    ambiguous-root-cause
-    Inject Scenario    source_replay_interruption
-    Wait For Active Faults    ${F_STREAM_STALE}    timeout=15
-    Record Scenario    source.replay_interruption    Replay stream interrupted
-    ...    ${F_STREAM_STALE}    PASS
-
-# -----------------------------------------------------------------------------
-# Diagnostic-path faults -- classified by the Evidence Collector, NOT Guardian
-# -----------------------------------------------------------------------------
-
-DFM Write Delay Is A Collector Classification
-    [Documentation]    Contract test. Collector compares direct GuardianEvidenceEvent.detected_at_ms with DFM/OpenSOVD first-visible time.
-    ...                Expected collector class: DIAGNOSTIC_DFM_WRITE_DELAY.
-    [Tags]    inject:diagnostics.dfm_write_delay    classify:DIAGNOSTIC_DFM_WRITE_DELAY    owner:collector    contract
-    Skip    Requires Evidence Collector timestamp API; must not be represented as a Guardian DFM fault.
-
-Partial OpenSOVD Visibility Is A Collector Classification
-    [Documentation]    Contract test. Collector compares the direct GuardianEvidenceEvent active set with the set exposed by OpenSOVD.
-    ...                Expected collector class: DIAGNOSTIC_SOVD_VISIBILITY_PARTIAL.
-    [Tags]    inject:diagnostics.opensovd_partial_visibility    classify:DIAGNOSTIC_SOVD_VISIBILITY_PARTIAL    owner:collector    contract
-    Skip    Requires Evidence Collector cross-layer visibility API; must not be represented as a Guardian DFM fault.
 
 *** Keywords ***
 Reset To Clean Baseline

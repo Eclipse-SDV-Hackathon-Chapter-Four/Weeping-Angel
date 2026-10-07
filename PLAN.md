@@ -3,27 +3,97 @@
 ## Initial Target Architecture
 ```mermaid
 flowchart
-  subgraph Injection
-      SUPER[Campaign supervisor] -->|request new combo| MUT
-      MUT -->|set expectation| EV
-      EV -->|record| SUPER
-  end
-  SRC_ORG((ASC replay)) --> MUT[Mutator]
-  MUT[Case mutator] -->|generate| SRC_MUT((ASC input)) --> CANP[KUKSA CAN Provider]
-  CANP --> KDB[KUKSA Data Broker]
-  KDB -->|gRPC| VSSUP[VSS uProtocol Publisher Service]
-  VSSUP -->|uProtocol publish| G[Battery Thermal Guardian]
 
-  G -->|state, fault, mitigation events| UBUS
-  G --> DFM[DFM fault records]
-  DFM --> SOVD[OpenSOVD]
+    %% =========================================================
+    %% Fault Injection
+    %% =========================================================
 
-  UBUS[uProtocol channels] --> EV[Evidence collector]
-  SOVD --> EV
-  
-  SUPER -->|increment| REP((Evidenve Report))
+    subgraph FI["Fault Injection"]
+        direction TB
+
+        MUTATOR["CASE Mutation"]
+
+        ASC[/ASC/]
+        JSON[/JSON/]
+
+        MUTATOR -->|CAN| ASC
+        MUTATOR -->|"fault type"| JSON
+    end
+
+
+    %% =========================================================
+    %% Vehicle Gateway
+    %% =========================================================
+
+    subgraph VG["Vehicle Gateway"]
+        direction LR
+
+        KUKSA_CAN["KUKSA CAN Provider"]
+        KUKSA_DB["KUKSA Data Broker"]
+        VSS["VSS uProtocol Service"]
+
+        KUKSA_CAN -->|"Socket CAN"| KUKSA_DB
+        KUKSA_DB -->|"IP? VSS"| VSS
+    end
+
+
+    %% =========================================================
+    %% Diagnostic / Fault Handling
+    %% =========================================================
+
+    subgraph DIAG["Diagnostic / Fault Handling"]
+        direction TB
+
+        ZENOH["ZENOH Daemon"]
+        GUARDIAN["Guardian"]
+        DFM["DFM Aggregation"]
+        OPENSOVD["openSOVD"]
+        EVIDENCE["Evidence Collector"]
+
+        ZENOH -->|"TCP/IP<br/>pub: BPM<br/>rec: fault/ok"| GUARDIAN
+        GUARDIAN -->|"IPC<br/>fault/ok"| DFM
+        DFM -->|"IPC"| OPENSOVD
+        OPENSOVD -->|"REST"| EVIDENCE
+    end
+
+
+    %% =========================================================
+    %% Connections between subgraphs
+    %% =========================================================
+
+    ASC -->|"open()"| KUKSA_CAN
+
+    VSS -->|"uProtocol"| GUARDIAN
+
+    ZENOH -->|"TCP/IP, BPM"| VSS
+
+    ZENOH -->|"BPM, fault/ok"| EVIDENCE
+
+    JSON -->|"open()"| EVIDENCE
+
+
+    %% =========================================================
+    %% User
+    %% =========================================================
+
+    USER["User"]
+
+    OPENSOVD -->|"uses"| USER
+    EVIDENCE -->|"uses"| USER
+
+
+    %% =========================================================
+    %% Styling
+    %% =========================================================
+
+    classDef software fill:#eaf3ff,stroke:#3973ac,stroke-width:1.5px;
+    classDef file fill:#fff4e5,stroke:#c77b00,stroke-width:1.5px;
+    classDef user fill:#f5f5f5,stroke:#666,stroke-width:1.5px;
+
+    class MUTATOR,KUKSA_CAN,KUKSA_DB,VSS,ZENOH,GUARDIAN,DFM,OPENSOVD,EVIDENCE software;
+    class ASC,JSON file;
+    class USER user;
 ```
-<!-- OD[openDuT remote orchestration] FI -->
 
 ## Fault Injector/Case Mutator
 

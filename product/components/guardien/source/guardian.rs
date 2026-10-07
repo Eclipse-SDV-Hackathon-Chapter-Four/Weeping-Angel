@@ -84,16 +84,20 @@ fn report_detection(detection: &Detection, faults: &FaultReporterHandle) {
     if detection.active {
         warn!(
             class = detection.class.as_str(),
+            level = detection.level.as_str(),
             signal,
             observed = ?detection.observed,
             limit = ?detection.limit,
             residual = ?detection.residual,
+            utilization = ?detection.utilization,
             "Guardian detection active"
         );
     } else {
         info!(
             class = detection.class.as_str(),
-            signal, "Guardian detection cleared"
+            level = detection.level.as_str(),
+            signal,
+            "Guardian detection cleared"
         );
     }
 }
@@ -197,7 +201,7 @@ fn fault_catalog_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../config/catalog/battery_guardian.json")
+                .join("../../config/battery_guardian/guardian_diagnostics.json")
         })
 }
 
@@ -206,8 +210,8 @@ fn configuration_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../config")
-                .join("battery_guardian.yaml")
+                .join("../../config/battery_guardian")
+                .join("guardian_model.yaml")
         })
 }
 

@@ -1,5 +1,7 @@
 FROM mcr.microsoft.com/devcontainers/rust:1-bookworm
 
+RUN rustup component add rustfmt clippy
+
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends \
         build-essential pkg-config cmake clang libclang-dev libssl-dev \
@@ -27,3 +29,17 @@ RUN case "$(dpkg --print-architecture)" in \
     && curl -fsSL -o /usr/local/bin/bazel \
         "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-${bazel_arch}" \
     && chmod +x /usr/local/bin/bazel
+
+# Zenoh router (uProtocol message bus). The plugins (rest, storage_manager)
+# must stay next to the zenohd binary, which is where zenohd looks for them.
+# Keep the version in line with the zenoh crate used by the Rust components.
+ARG ZENOH_VERSION=1.10.1
+RUN case "$(dpkg --print-architecture)" in \
+        amd64) zenoh_arch=x86_64 ;; \
+        arm64) zenoh_arch=aarch64 ;; \
+        *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/zenoh.zip \
+        "https://github.com/eclipse-zenoh/zenoh/releases/download/${ZENOH_VERSION}/zenoh-${ZENOH_VERSION}-${zenoh_arch}-unknown-linux-gnu-standalone.zip" \
+    && unzip -o /tmp/zenoh.zip -d /usr/local/bin \
+    && rm /tmp/zenoh.zip

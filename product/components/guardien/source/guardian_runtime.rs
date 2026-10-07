@@ -3,7 +3,8 @@ use std::time::Instant;
 
 use crate::guardian_config::GuardianConfig;
 use crate::guardian_model::{
-    evaluate_sample, BatterySample, Detection, DetectionClass, DetectionKey, StuckDetector,
+    evaluate_sample, BatterySample, Detection, DetectionClass, DetectionKey, DetectionLevel,
+    StuckDetector,
 };
 
 #[derive(Debug, Default)]
@@ -51,10 +52,12 @@ impl GuardianRuntime {
             let limit_ms = config.missing_packet_timeout().as_secs_f32() * 1_000.0;
             return vec![Detection::triggered(
                 DetectionClass::StreamStale,
+                DetectionLevel::Violation,
                 None,
                 Some(observed_ms),
                 Some(limit_ms),
                 Some(observed_ms - limit_ms),
+                None,
                 now,
             )];
         }
@@ -65,6 +68,7 @@ impl GuardianRuntime {
             transitions.push(Detection::cleared(
                 DetectionKey {
                     class: DetectionClass::StreamStale,
+                    level: DetectionLevel::Violation,
                     signal: None,
                 },
                 now,
@@ -140,12 +144,26 @@ mod tests {
     use super::*;
 
     fn config() -> GuardianConfig {
-        GuardianConfig::from_yaml_str(include_str!("../../../config/battery_guardian.yaml"))
-            .expect("test configuration")
+        GuardianConfig::from_yaml_str(include_str!(
+            "../../../config/battery_guardian/guardian_model.yaml"
+        ))
+        .expect("test configuration")
     }
 
     fn nominal(at: Instant) -> BatterySample {
         BatterySample::new(18.0, 20.0, 22.0, 50.0, at)
+    }
+
+    fn thermal_sample(at: Instant, temp_max: f32) -> BatterySample {
+        BatterySample::new(temp_max - 2.0, temp_max - 1.0, temp_max, 50.0, at)
+    }
+
+    fn thermal_transitions(detections: &[Detection]) -> Vec<(DetectionLevel, bool)> {
+        detections
+            .iter()
+            .filter(|detection| detection.class == DetectionClass::ThermalLimit)
+            .map(|detection| (detection.level, detection.active))
+            .collect()
     }
 
     #[test]
@@ -169,6 +187,7 @@ mod tests {
         let first = runtime.cycle(stale_at, &cfg);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].class, DetectionClass::StreamStale);
+        assert_eq!(first[0].level, DetectionLevel::Violation);
         assert!(first[0].active);
 
         assert!(runtime
@@ -219,6 +238,44 @@ mod tests {
         assert_eq!(
             runtime.latest_sample_generation(),
             runtime.last_evaluated_generation()
+        );
+    }
+
+    #[test]
+    fn thermal_state_transitions_are_mutually_exclusive() {
+        let base = Instant::now();
+        let cfg = config();
+        let mut runtime = GuardianRuntime::new();
+
+        runtime.receive_sample(thermal_sample(base, 59.0));
+        assert!(thermal_transitions(&runtime.cycle(base, &cfg)).is_empty());
+
+        let warning_at = base + cfg.evaluation_period();
+        runtime.receive_sample(thermal_sample(warning_at, 60.0));
+        assert_eq!(
+            thermal_transitions(&runtime.cycle(warning_at, &cfg)),
+            vec![(DetectionLevel::Warning, true)]
+        );
+
+        let critical_at = warning_at + cfg.evaluation_period();
+        runtime.receive_sample(thermal_sample(critical_at, 70.0));
+        let critical = thermal_transitions(&runtime.cycle(critical_at, &cfg));
+        assert!(critical.contains(&(DetectionLevel::Warning, false)));
+        assert!(critical.contains(&(DetectionLevel::Critical, true)));
+        assert_eq!(critical.len(), 2);
+
+        let warning_again_at = critical_at + cfg.evaluation_period();
+        runtime.receive_sample(thermal_sample(warning_again_at, 69.0));
+        let warning_again = thermal_transitions(&runtime.cycle(warning_again_at, &cfg));
+        assert!(warning_again.contains(&(DetectionLevel::Critical, false)));
+        assert!(warning_again.contains(&(DetectionLevel::Warning, true)));
+        assert_eq!(warning_again.len(), 2);
+
+        let normal_at = warning_again_at + cfg.evaluation_period();
+        runtime.receive_sample(thermal_sample(normal_at, 59.0));
+        assert_eq!(
+            thermal_transitions(&runtime.cycle(normal_at, &cfg)),
+            vec![(DetectionLevel::Warning, false)]
         );
     }
 }

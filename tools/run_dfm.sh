@@ -23,7 +23,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_DIR="$ROOT_DIR/run/"
 DFM_BIN="$ROOT_DIR/product/components/fault-lib/target/debug/dfm_bin"
 DFM_STORAGE="$RUN_DIR/dfm-storage"
-CATALOG_DIR="$ROOT_DIR/product/config/catalog"
+CATALOG_DIR="$ROOT_DIR/product/config/battery_guardian"
 
 mkdir -p "$RUN_DIR"
 

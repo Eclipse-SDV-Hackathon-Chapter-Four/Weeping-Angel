@@ -1,0 +1,47 @@
+guardian:
+  evaluation_period_ms: 100
+  missing_packet_timeout_ms: 500
+
+  warning:
+    utilization_threshold: 0.8
+
+  temperature:
+    absolute_min_c: -30.0
+    absolute_max_c: 70.0
+
+    warning_margin_c: 10.0
+
+    reference_c: 20.0
+    hot_state_c: 70.0
+
+    spread:
+      cold_c: 12.0
+      hot_c: 7.0
+
+    hotspot:
+      cold_c: 5.0
+      hot_c: 2.0
+
+    dynamics:
+      heating_rate_c_per_s:
+        cold: 8.0
+        hot: 5.0
+
+      cooling_rate_c_per_s: 6.0
+
+      soc_coupling:
+        enabled: false
+        gain_c_per_pp: 0.25
+        rate_cap_pp_per_s: 2.0
+
+  soc:
+    min_percent: 0.0
+    max_percent: 100.0
+    max_step_pp: 0.5
+
+  stuck:
+    enabled: true
+    window_samples: 10
+    flatness_epsilon_c: 0.25
+    temperature_excitation_c: 1.0
+    soc_excitation_pp: 1.0

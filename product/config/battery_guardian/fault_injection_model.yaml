@@ -1,0 +1,104 @@
+schema_version: 1
+
+# Canonical CAN-derived sample stream mutated by signal injections.
+sample_stream:
+  id: battery_temperature
+  can_frame_id: 0x100
+
+# Canonical semantic signal names. DBC names are implementation metadata for
+# the existing ASC/CAN mutation path, not a second decoding specification.
+signals:
+  temp_min:
+    dbc_signal: CellTempMin
+    unit: celsius
+  temp_avg:
+    dbc_signal: CellTempAvg
+    unit: celsius
+  temp_max:
+    dbc_signal: CellTempMax
+    unit: celsius
+  soc:
+    dbc_signal: StateOfCharge
+    unit: percent
+
+# Contract for the record emitted by the Fault Generator when an injection is
+# executed. The record, not any Guardian detection, is injection ground truth.
+ground_truth_record:
+  required_fields:
+    - injection_id
+    - injected_class
+    - started_at
+  timing_fields_any_of:
+    - finished_at
+    - duration_ms
+  signal_fault_required_fields:
+    - mutations
+
+injections:
+  - id: signal_stuck
+    injected_class: signal.stuck
+    mutations:
+      - signal: temp_avg
+        operator: stuck
+        parameters:
+          duration_samples: 20
+
+  - id: signal_spike
+    injected_class: signal.spike
+    mutations:
+      - signal: temp_max
+        operator: spike
+        parameters:
+          delta: 10.0
+          duration_samples: 1
+
+  - id: signal_drift
+    injected_class: signal.drift
+    mutations:
+      - signal: temp_max
+        operator: drift
+        parameters:
+          rate_per_sample: 0.5
+          duration_samples: 30
+
+  - id: signal_out_of_range
+    injected_class: signal.out_of_range
+    mutations:
+      - signal: temp_min
+        operator: out_of_range
+        parameters:
+          value: -35.0
+          duration_samples: 10
+
+  - id: combined_temperature_fault
+    injected_class: signal.combination
+    mutations:
+      - signal: temp_avg
+        operator: drift
+        parameters:
+          rate_per_sample: 0.5
+          duration_samples: 20
+      - signal: temp_max
+        operator: spike
+        parameters:
+          delta: 8.0
+          duration_samples: 1
+
+  - id: transport_delay
+    injected_class: transport.delay
+    action:
+      operator: delay
+      delay_ms: 750
+      duration_ms: 2000
+
+  - id: transport_drop
+    injected_class: transport.drop
+    action:
+      operator: drop
+      duration_ms: 2000
+
+  - id: source_dropout
+    injected_class: source.dropout
+    action:
+      operator: suspend_source
+      duration_ms: 2000
