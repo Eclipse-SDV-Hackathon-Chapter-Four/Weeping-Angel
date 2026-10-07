@@ -1,6 +1,10 @@
 guardian:
   evaluation_period_ms: 100
   missing_packet_timeout_ms: 500
+  # Largest admissible source/generation interval Δτ between consecutive
+  # samples (nominal 100 ms cycle + tolerance); above it, generations are
+  # missing (STREAM_GENERATION_GAP, ADR-015).
+  max_generation_interval_ms: 150
 
   warning:
     utilization_threshold: 0.8

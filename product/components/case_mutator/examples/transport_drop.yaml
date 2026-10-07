@@ -9,7 +9,9 @@ generation_goal:
   primary:
     - class: STREAM_STALE
       level: VIOLATION
-  allowed: []
+  allowed:
+    - class: STREAM_GENERATION_GAP
+      level: VIOLATION
   forbidden: []
   allow_unspecified_codetections: false
 seed: 0

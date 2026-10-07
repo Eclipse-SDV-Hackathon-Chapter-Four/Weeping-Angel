@@ -785,6 +785,11 @@ conservative (for example 1 s).
 `STREAM_STALE` is a symptom only. `transport.delay`, `transport.drop`, and
 `source.dropout` remain distinct injected causes.
 
+A `transport.drop` that removes frames while preserving the remaining source
+timestamps additionally yields `STREAM_GENERATION_GAP` when the stream resumes
+(ADR-015). Drop goals must list it as primary or allowed, or permit
+unspecified co-detections.
+
 The stale check uses the receive axis ($\Delta t^{\mathrm{recv}}$, projected
 relative now), never the source/generation interval $\Delta\tau$.
 

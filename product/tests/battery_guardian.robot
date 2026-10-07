@@ -35,6 +35,7 @@ Documentation     Battery Guardian — physical-consistency and fault-campaign e
 ...                 PHYSICAL_SOC_RATE / VIOLATION
 ...                 SIGNAL_STUCK / VIOLATION
 ...                 STREAM_STALE / VIOLATION
+...                 STREAM_GENERATION_GAP / VIOLATION (missing source-timestamp generations)
 ...               Continuous WARNING observations remain internal when no DFM mapping exists.
 ...
 ...               Physical model checked by the Guardian:
@@ -54,7 +55,7 @@ Library           SovdFaultLibrary
 ...                   catalog=%{CATALOG=../config/battery_guardian/guardian_diagnostics.json}
 ...                   report=%{REPORT=../reports/evidence_report.md}
 
-Suite Setup       Opensovd Lists All Catalog Faults    11
+Suite Setup       Opensovd Lists All Catalog Faults    12
 Suite Teardown    Write Evidence Report
 Test Setup        Reset To Clean Baseline
 
@@ -71,6 +72,7 @@ ${F_SOC_RANGE}           BatterySocRange
 ${F_SOC_RATE}            BatterySocRate
 ${F_SIGNAL_STUCK}        BatterySignalStuck
 ${F_STREAM_STALE}        BatteryTempStreamStale
+${F_GENERATION_GAP}      BatteryTempGenerationGap
 
 *** Test Cases ***
 # -----------------------------------------------------------------------------

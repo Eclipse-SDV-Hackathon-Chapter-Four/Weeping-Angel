@@ -62,7 +62,7 @@ fn transport_drop_preserves_source_timeline_and_predicts_stale() {
         &temp,
         "transport_drop",
         "transport.drop",
-        "  primary:\n    - class: STREAM_STALE\n      level: VIOLATION\n  allowed: []\n  forbidden: []\n  allow_unspecified_codetections: false\n",
+        "  primary:\n    - class: STREAM_STALE\n      level: VIOLATION\n  allowed:\n    - class: STREAM_GENERATION_GAP\n      level: VIOLATION\n  forbidden: []\n  allow_unspecified_codetections: false\n",
     );
     let output = temp.path().join("output");
     let RunResult::Generated { asc, oracle, .. } = run(&request, &output).unwrap() else {
@@ -71,7 +71,9 @@ fn transport_drop_preserves_source_timeline_and_predicts_stale() {
     let asc = fs::read_to_string(asc).unwrap();
     assert!(!asc.contains(" 2.000000 CANFD   1 Rx        100"));
     assert!(asc.contains(" 4.000000 CANFD   1 Rx        100"));
-    assert!(fs::read_to_string(oracle).unwrap().contains("STREAM_STALE"));
+    let oracle = fs::read_to_string(oracle).unwrap();
+    assert!(oracle.contains("STREAM_STALE"));
+    assert!(oracle.contains("STREAM_GENERATION_GAP"));
 }
 
 #[test]
@@ -81,7 +83,7 @@ fn identical_inputs_generate_identical_artifacts() {
         &temp,
         "transport_drop",
         "transport.drop",
-        "  primary:\n    - class: STREAM_STALE\n      level: VIOLATION\n  allowed: []\n  forbidden: []\n  allow_unspecified_codetections: false\n",
+        "  primary:\n    - class: STREAM_STALE\n      level: VIOLATION\n  allowed:\n    - class: STREAM_GENERATION_GAP\n      level: VIOLATION\n  forbidden: []\n  allow_unspecified_codetections: false\n",
     );
     let first = temp.path().join("first");
     let second = temp.path().join("second");

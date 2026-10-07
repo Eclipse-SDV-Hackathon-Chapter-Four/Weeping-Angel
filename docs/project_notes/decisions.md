@@ -442,3 +442,30 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ The Mutator must be extended from one injection to an ordered incident sequence.
 - ❌ Exact trajectories, incident schedules, campaign applicability, reset behavior, and runner technology remain to be agreed.
 - ❌ The current Mutator's emitted model hash must be removed when its output is aligned with this decision.
+
+### ADR-015: Guardian detects lost samples as STREAM_GENERATION_GAP from source timestamps (2026-10-07)
+
+**Context:**
+- ADR-013 makes `timestamp_ms` the common time base and defines unexpected forward gaps in `ts` as missing generations, but the Guardian ignored the timestamp: it used local receive time for rates and only saw sustained loss (> 500 ms) as `STREAM_STALE`.
+- The runtime kept only the latest sample, so several samples arriving in one 100-ms cycle were silently overwritten; with gap detection this would itself look like loss.
+- Pass/fail results of the new check must reach the DFM like the existing checks.
+
+**Decision:**
+- New detection class `STREAM_GENERATION_GAP`, binary level `VIOLATION`, DFM fault `BatteryTempGenerationGap` (category Communication, severity Error). Raised when `Δτ = ts_k − ts_max > max_generation_interval_ms` (150 ms = nominal 100 ms + tolerance), where `ts_max` is the highest evaluated source timestamp; the next regular sample clears it (`Failed` → `Passed`).
+- Name uses "generation", not "sequence": no sequence numbers exist (ADR-001); the observation is a symptom and does not infer `transport.drop` vs. source loss.
+- `timestamp_ms` is required in `BatteryTempEvent`; messages without it are malformed. Samples carry it, and temperature/SoC rates use `Δτ` (ADR-013), so burst arrival after delay/loss does not produce false rate violations.
+- Received samples are queued and each is evaluated exactly once per cycle in arrival order.
+- A timestamp behind `ts_max` while the stream is `STREAM_STALE` is a source/replay restart: baseline, previous sample and stuck window reset; no gap.
+- Evidence (DFM env data and `GuardianFaultEvent`) gains optional `interval_ms` (Δτ) and `timestamp_ms` (causing sample).
+- Freshness keeps using local monotonic receive instants; the age difference equals the age on the projected relative clock (offset cancels), so ADR-013 is respected without a projected clock yet.
+
+**Alternatives Considered:**
+- Also add `STREAM_DUPLICATE` / `STREAM_OUT_OF_ORDER` now → Deferred: out of the requested scope; non-increasing timestamps are simply not a gap.
+- `WARNING` for one missing generation, `VIOLATION` for several → Rejected: loss is binary like stale; Δτ in the evidence carries the magnitude.
+- Gap limit derived only from the stale timeout → Rejected: would miss short losses, which are the point of the check.
+
+**Consequences:**
+- ✅ Single lost samples are detected and reported to the DFM with Δτ evidence; `transport.drop` yields `STREAM_STALE` and `STREAM_GENERATION_GAP`.
+- ✅ Rates follow the model doc (Δτ); no sample is lost inside the Guardian.
+- ❌ The VSS bridge still stamps wall-clock `now_ms()` per broker update (ADR-013 open point): jitter above 150 ms raises false gaps, and partial updates can produce several events per frame. The bridge must preserve the CAN `TimeStamp` before live runs rely on this check.
+- ❌ A source restart without a stale phase is not recognised (no gaps until the new timeline passes `ts_max`); out-of-order samples still update the previous sample.

@@ -107,7 +107,8 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **Detection classes:** `PHYSICAL_TEMP_ABSOLUTE_LIMIT`, `PHYSICAL_TEMP_ORDERING`,
   `PHYSICAL_TEMP_SPREAD`, `PHYSICAL_TEMP_HOTSPOT`, `PHYSICAL_TEMP_RATE`,
   `PHYSICAL_SOC_RANGE`, `PHYSICAL_SOC_RATE`, `SIGNAL_STUCK`, `STREAM_STALE`,
-  `STREAM_DUPLICATE`, `STREAM_REORDERED`.
+  `STREAM_GENERATION_GAP` (ADR-015); `STREAM_DUPLICATE`, `STREAM_REORDERED`
+  planned, not implemented.
 - **Mitigation (M1):** enters `MITIGATING` and emits an event; **no actuator**.
 - **Ordering guarantee:** emit evidence **before** the DFM write.
 - **`run_id`:** from startup configuration (ADR-007).
@@ -291,7 +292,7 @@ Guardian additionally emits `PHYSICAL_TEMP_RATE` evidence and raises
 | `signal.drift` | C2 (ASC) | `PHYSICAL_TEMP_SPREAD`, `PHYSICAL_TEMP_HOTSPOT` | stays under rate bound |
 | `signal.out_of_range` | C2 (ASC) | `PHYSICAL_TEMP_ABSOLUTE_LIMIT` | distinct from DBC range |
 | `transport.delay` | C2/C14 ASC replay-time shift | `STREAM_STALE` | payload source timestamp unchanged; ambiguous root cause |
-| `transport.drop` | C2/C14 CAN-frame omission | `STREAM_STALE` | later timestamps unchanged; ambiguous root cause |
+| `transport.drop` | C2/C14 CAN-frame omission | `STREAM_STALE`, `STREAM_GENERATION_GAP` | later timestamps unchanged → gap on resume (ADR-015); root cause still ambiguous |
 | `transport.duplicate` | C2/C14 frame duplication | `STREAM_DUPLICATE` | deferred from implemented Mutator scope |
 | `transport.reorder` | **deferred (v1 out)** | `STREAM_REORDERED` (deferred) | no canonical v1 replay operator |
 | `source.dropout` | replay stop | `STREAM_STALE` | ambiguous root cause |

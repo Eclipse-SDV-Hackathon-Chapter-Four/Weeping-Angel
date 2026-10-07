@@ -153,6 +153,8 @@ mod tests {
                 limit: Some(2.0),
                 residual: Some(1.5),
                 utilization: Some(1.75),
+                interval_ms: Some(100),
+                timestamp_ms: Some(1_200),
             },
         };
         let value: serde_json::Value =
@@ -178,7 +180,9 @@ mod tests {
                     "observed": 3.5,
                     "limit": 2.0,
                     "residual": 1.5,
-                    "utilization": 1.75
+                    "utilization": 1.75,
+                    "interval_ms": 100,
+                    "timestamp_ms": 1200
                 }
             })
         );
