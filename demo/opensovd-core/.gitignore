@@ -1,7 +1,0 @@
-target/
-coverage.json
-dist/
-__pycache__/
-*.pyc
-.direnv/
-gen/
