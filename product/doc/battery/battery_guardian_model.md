@@ -91,6 +91,18 @@ $$
 \right).
 $$
 
+The configuration is valid only when both normalization points lie inside the
+admissible temperature envelope:
+
+$$
+T_{\mathrm{abs,min}}
+\le T_{\mathrm{ref}}
+< T_{\mathrm{hot}}
+\le T_{\mathrm{abs,max}}.
+$$
+
+Equality is intentionally allowed at the outer boundaries.
+
 Parameters:
 
 | Parameter | Symbol | Proposed value | Unit |

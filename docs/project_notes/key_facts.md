@@ -49,7 +49,7 @@ Never store credentials here — this file is committed to git.
 - Dev-container workflow: `make test`, `make check`, and `make run` from the component directory invoke Cargo directly; the repository-mounted `target/` and Cargo home provide the caches
 - The shared `.devcontainer` initializes the Guardian's `fault-lib` submodule, installs rustfmt and Clippy, preinstalls the Codex VS Code extension, and forwards Guardian HTTP port 8080
 - `make check` also validates the canonical injection model and runs its malformed-configuration tests
-- Verification on 2026-10-07 (after ADR-007): `make check` in the dev-container image passed formatting, Clippy with warnings denied, all 41 Rust tests, injection-model validation, and all 10 validator tests
+- Verification on 2026-10-07: dev-container `make check` passed formatting, Clippy with warnings denied, all 37 Rust tests, injection-model validation, and all 10 validator tests
 
 ## CAN Assets (`demo/can/`)
 
