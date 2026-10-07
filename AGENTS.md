@@ -5,6 +5,14 @@ Challenge spec: `README.md` (Definition of Done = acceptance list). Demo: `demo/
 (reference implementation, not authoritative — ADR-003). Idea backlog: `PLAN.md`
 (no authority over ADRs, see below).
 
+## Repo Layout — Component Convention
+
+- New product components are created under `product/components/<component>/`
+  (first component: `case_mutator/`). A component is self-contained: its
+  code, its own README, its own tests.
+- Shared contracts live in `product/interfaces/` (e.g.
+  `battery_fault_contract.yaml`), shared suites in `product/tests/`.
+
 ## Project Memory System
 
 This project maintains institutional knowledge in `docs/project_notes/` for
