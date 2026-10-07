@@ -22,11 +22,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_DIR="$ROOT_DIR/run/"
 OPENSOVD_BIN="$ROOT_DIR/product/components/opensovd-core/target/debug/opensovd-gateway"
-GATEWAY_URL="http://127.0.0.1:7690"
+GATEWAY_URL="http://localhost:7690"
 
 mkdir -p "$RUN_DIR"
 
-if [ -x $GATEWAY_BIN ] ; then
+if [ -x "$OPENSOVD_BIN" ] ; then
     "$OPENSOVD_BIN" >"$RUN_DIR/opensovd.log" 2>&1 &
     wait_http "$GATEWAY_URL/" "OpenSOVD gateway"
 else
