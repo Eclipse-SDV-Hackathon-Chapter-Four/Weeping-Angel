@@ -83,19 +83,20 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 **Decision:**
 - The product Guardian uses local monotonic receive timestamps (`Instant`) and a monotonically increasing sample-generation counter.
 - A configurable periodic task evaluates each fresh generation once. It reports `STREAM_STALE` when receive age exceeds the configured timeout and clears it on the next fresh sample.
-- No sequence number is added to `BatteryTempEvent`; all physical-model parameters come from the Guardian YAML configuration. A producer/source timestamp may be carried, but it is **not** used as the Guardian time base (its role is defined by ADR-007).
+- No sequence number is added to `BatteryTempEvent`; all physical-model parameters come from the Guardian YAML configuration. Every battery message does carry the source-relative generation timestamp defined by ADR-008. The Guardian does **not** substitute it for local monotonic receive time in staleness or temperature-rate checks, but may use discontinuities in the source timeline to detect missing message generations (`transport.drop`).
 - This receive-time decision supersedes ADR-001's not-yet-implemented heartbeat time base for the product Guardian. ADR-001's decision not to add a sequence number remains in force.
 
 **Alternatives Considered:**
 - Wait for and introduce the heartbeat contract from ADR-001 → Rejected: it blocks the specified Guardian and adds a new interface that the current architecture does not provide.
 - Reuse the demo's threshold/watchdog logic → Rejected: the supplied specification requires a full physical-consistency rewrite and the demo is non-authoritative under ADR-003.
-- Use producer timestamps for temporal checks → Rejected: receive timing must remain monotonic and independent of replay-controlled wall clocks.
+- Replace local receive time with producer timestamps for staleness or temperature-rate checks → Rejected: receive timing must remain monotonic and independent of replay-controlled progression. This does not prohibit source-timestamp gap analysis for drop detection.
 
 **Consequences:**
 - ✅ Listener, periodic scheduling, physical model, and reporting are cleanly separated.
-- ✅ Missing input is detectable without changing CAN, VSS, or uProtocol contracts.
+- ✅ Missing input remains detectable from local receive age; once a later message arrives, an unexpected source-timestamp gap may additionally reveal one or more missing generations.
+- ✅ The packed 8-byte CAN/DBC payload remains unchanged; its generation timestamp is transported as message metadata and in `BatteryTempEvent`.
 - ✅ The model is deterministic and unit-testable without Zenoh/uProtocol.
-- ❌ Receive-side staleness identifies the observed symptom only; it cannot distinguish transport delay/drop from source dropout.
+- ❌ Receive-side staleness alone identifies the observed symptom only. A source-timestamp gap identifies missing generations but cannot by itself prove whether they were lost at the source or in transport.
 
 ### ADR-005: Separate Guardian model, diagnostics, and injection ground truth (2026-10-07)
 
@@ -134,7 +135,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - Replace separate thermal classes with `THERMAL_LIMIT`: warning is active from the derived threshold `absolute_max_c - warning_margin_c` up to the maximum; critical is active at or above `absolute_max_c` and supersedes warning.
 - At the configured 70 °C boundary, `THERMAL_LIMIT / CRITICAL` is active without an absolute-limit violation; above it, `PHYSICAL_TEMP_ABSOLUTE_LIMIT / VIOLATION` is independently valid.
 - Spread, hotspot, and temperature-rate checks use `observed / limit`: no detection below the global utilization threshold, `Warning` from that threshold through 1.0, and `Violation` above 1.0. Other checks remain binary `Violation`s.
-- The existing DFM reporter is a configured class/level projection. Thermal warning/critical and existing physical violations retain their fault IDs; spread/hotspot/rate warnings remain internal evidence without new DFM catalog entries.
+- The existing DFM reporter is a configured class/level projection. Thermal warning/critical and existing physical violations retain their fault IDs; spread/hotspot/rate warnings have no DFM catalog entries but remain Guardian decisions and are published unchanged to the Evidence Collector under ADR-007.
 - The injection vocabulary remains separate and unchanged. In particular, `signal.spike` is not a Guardian class and may be observed as a temperature-rate warning or violation.
 
 **Alternatives Considered:**
@@ -145,55 +146,64 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
 **Consequences:**
 - ✅ One stable class vocabulary supports warning, violation, and critical observations without class proliferation.
-- ✅ Continuous-model warnings carry residual and utilization for later Evidence Collector integration without changing the DFM catalog.
+- ✅ Continuous-model warnings carry residual and utilization to the Evidence Collector without changing the DFM catalog.
 - ✅ Valid hot samples and absolute-limit violations remain independently observable, and fault-injection ground truth remains separate.
 - ❌ The demonstrator has no hysteresis; values oscillating around thermal or utilization thresholds can produce repeated state transitions.
 
-### ADR-007: Guardian mirrors DFM fault changes as uProtocol events (2026-10-07)
+### ADR-007: Guardian publishes its original decisions independently of DFM mapping (2026-10-07)
 
 **Context:**
-- ADR-005 made the DFM reporter the sole reporting path, but the challenge README requires fault events to be exchanged over uProtocol.
-- Consumers on the bus (Evidence Collector, mitigation) need the same fault truth as the DFM, without a separate mapping that could drift.
+- ADR-005 made the DFM reporter the diagnostic reporting path, but a DFM projection is not the Guardian's complete original view: it can aggregate signals and omit detections for which no diagnostic mapping exists.
+- The Evidence Collector must be able to distinguish what entered the Guardian, what the Guardian itself decided, and what subsequently appeared in DFM/OpenSOVD.
+- In particular, utilization warnings without DFM mappings must remain observable as Guardian decisions.
 
 **Decision:**
-- Amends ADR-005 (on top of ADR-006): the Guardian publishes every fault-level change it reports to the DFM also as JSON `GuardianFaultEvent` on uProtocol topic `//guardian/1001/1/8001`. The DFM stays the diagnostic truth (SOVD); no second catalog or mapping is introduced.
-- The ADR-006 class/level → fault projection and aggregation (`Failed` while ≥ 1 signal active) live once in `guardian_faults.rs`; DFM and uProtocol consume the same `FaultEvent`. Unmapped detections (e.g. utilization warnings) are published on neither channel.
-- Both channels are independent: neither waits for the other, a missing DFM or failing Zenoh send only drops/logs on its own channel.
-- Only transitions are published, plus the one-shot startup all-clear baseline (`baseline: true`); no periodic re-publication.
+- Amends ADR-005 (on top of ADR-006): every internal Guardian `Detection` transition is published in the Guardian's original representation as `GuardianEvidenceEvent` over uProtocol. The Evidence Collector receives this event before and independently of any class/level → DFM mapping.
+- The Guardian stream contains mapped and unmapped detections alike, including utilization warnings. Its payload carries the Guardian decision (`DetectionClass × DetectionLevel`), active/cleared state, signal and the available observed/limit/residual/utilization evidence. It does not require or infer a DFM `fault_id`.
+- Independently, the same internal detection may enter the configured DFM projection and fault-level aggregation. DFM mapping, omission or aggregation must not alter or suppress the GuardianEvidenceEvent.
+- The Evidence Collector subscribes directly to `//battery-vss/9001/1/9001` (`BatteryTempEvent`) and to the Guardian decision stream. It obtains DFM/OpenSOVD messages through the diagnostic path as a third, independent view.
+- The Guardian decision publisher and DFM reporter are independent: neither waits for the other, and failure of one sink does not suppress the other.
+- The Guardian stream publishes actual detection transitions only. A synthetic DFM startup baseline is diagnostic state and is not presented as an original Guardian decision.
 
 **Alternatives Considered:**
-- Publish from inside the DFM worker → Rejected: the worker blocks until the DFM is up, coupling bus events to DFM availability.
-- Publish raw signal-level detections → Rejected: bus and DFM would report different facts.
-- Periodic state re-publication for late subscribers → Rejected for now: transitions only; late joiners use DFM/SOVD or `/state`.
+- Mirror only mapped DFM results over uProtocol → Rejected: the Evidence Collector would lose the Guardian's original signal-level decisions and every unmapped warning.
+- Publish from inside the DFM worker → Rejected: this would apply DFM mapping/aggregation first and couple Guardian evidence to DFM availability.
+- Periodically re-publish decisions for late subscribers → Rejected for now: the Guardian stream records transitions; diagnostic current state remains available through DFM/SOVD.
 
 **Consequences:**
-- ✅ One aggregation, two independent sinks with identical fault ids (`fault_key`).
-- ✅ Bus consumers get structured numeric evidence (DFM env data stays string-formatted, max 8 entries).
+- ✅ The Evidence Collector has the Guardian's complete original view, including detections that never become DFM faults.
+- ✅ It can correlate three independent evidence planes: incoming battery events, Guardian decisions, and DFM/OpenSOVD diagnostics.
+- ✅ DFM/OpenSOVD remains the diagnostic truth while GuardianEvidenceEvent remains the truth of what the Guardian decided.
 - ❌ Subscribers that join after a transition miss it (no retain on Zenoh publish).
-- ❌ Unbounded publish queue: a permanently stalled transport grows memory (transition rate is low).
+- ❌ The existing mapped `GuardianFaultEvent` implementation must be replaced or separated from the raw GuardianEvidenceEvent contract.
 
-### ADR-008: Source timestamp as message identity for duplicate/reorder (amends ADR-004) (2026-10-06)
+### ADR-008: Source-relative generation timestamps accompany battery messages (amends ADR-004) (2026-10-07)
 
 **Context:**
-- ADR-004 keeps the Guardian's time base on receiver-side receive timestamps and dropped ADR-001's heartbeat, but stated that no producer timestamp is added to `BatteryTempEvent`.
-- The README fault classes include `transport.duplicate` / `transport.reorder`, which need message identity; equal payload values alone are insufficient.
+- ADR-004 keeps the Guardian's model time base on receiver-side receive timestamps and dropped ADR-001's heartbeat.
+- Deterministic replay and evidence correlation need a source time that is shared by the CAN-side message, the uProtocol battery event, the Guardian and the Evidence Collector.
+- The packed CAN frame is already full, so the timestamp cannot be another DBC signal in the 8-byte payload.
 
 **Decision:**
-- No sequence numbers in any payload or component (retained from ADR-001/ADR-004).
-- The detection time base remains receiver-side receive timestamps plus timeouts (staleness, windows, per-sample deltas); ADR-004's receive-time evaluation stands.
-- A producer/source timestamp **is** carried in `BatteryTempEvent` and is used only as message identity for duplicate/reorder detection; it is never the Guardian time base.
-- Amends ADR-004's "no producer timestamp" clause; it does not reintroduce the heartbeat of ADR-001.
+- No sequence numbers are introduced (retained from ADR-001/ADR-004).
+- Every generated battery CAN message is associated with `timestamp_ms`, its generation time in integer milliseconds on the source/replay timeline. The first generated message starts at `0`; subsequent values express elapsed source time from that origin.
+- `timestamp_ms` is CAN-message metadata, not an additional DBC payload signal. The CAN/VSS/uProtocol bridge preserves the value unchanged in `BatteryTempEvent`; it must not replace it with bridge wall-clock or receive time.
+- The Guardian and Evidence Collector independently subscribe to the same `BatteryTempEvent` topic and therefore receive the same source timestamp and battery values.
+- The Guardian continues to use local monotonic receive time for staleness and temperature-rate evaluation. The source timestamp is available for message identity, duplicate/reorder analysis, drop detection and cross-stream evidence correlation. In particular, the Guardian may compare consecutive source timestamps against the expected generation cadence and treat unexpected forward gaps as missing message generations; this does not make source time the receive-time model base.
+- This amends ADR-004's former optional producer-timestamp clause and does not reintroduce ADR-001's heartbeat.
 
 **Alternatives Considered:**
-- Keep ADR-004's "no producer timestamp" clause → Rejected: duplicate/reorder cannot be detected without message identity.
+- Generate the timestamp in the VSS/uProtocol bridge → Rejected: that records bridge processing time, not CAN-message generation time, and prevents end-to-end correlation.
+- Use Unix epoch milliseconds → Rejected for the campaign stream: a zero-based source timeline is deterministic and replayable without wall-clock synchronization.
 - Add a sequence number → Rejected: already rejected in ADR-001 (frame full; contract churn).
-- Use the source timestamp as time base → Rejected: producer-controlled, not monotonic under replay/pause.
+- Use the source timestamp as the Guardian's receive-time model base → Rejected: it cannot measure receive-side silence or transport delay and remains controlled by replay progression. Selective use for generation-gap/drop detection remains permitted.
 
 **Consequences:**
-- ✅ `transport.duplicate` / `transport.reorder` become detectable via source-timestamp identity.
-- ✅ The Guardian time base stays independent of replay-controlled wall clocks.
-- ❌ Source timestamp is trusted for identity only; clock skew/rewrite can create false duplicate/reorder signals.
-- ❌ Detection is deferred until the Guardian implements identity-based checks; the injection vocabulary (ADR-005) does not yet define `transport.duplicate`.
+- ✅ CAN-side input, Guardian input and Evidence Collector input share one deterministic millisecond timeline beginning at zero.
+- ✅ `transport.drop`, `transport.duplicate` and `transport.reorder` can use source-timestamp gaps or identity while the Guardian's receive-time model remains independent.
+- ✅ Replays preserve correlation without depending on host wall clocks.
+- ❌ CAN acquisition, VSS/uProtocol publishing and consumers must all preserve `timestamp_ms` exactly; replacing or rebasing it breaks evidence correlation.
+- ❌ Timestamp-based drop/duplicate/reorder detection remains deferred until implemented, and the injection vocabulary (ADR-005) does not yet define `transport.duplicate`.
 
 ### ADR-009: DFM remains in the chain (2026-10-06)
 
@@ -202,7 +212,8 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - README Definition of Done requires DFM records for faulted scenarios and OpenSOVD exposing matching diagnostics; the target architecture is `Guardian → DFM → OpenSOVD`.
 
 **Decision:**
-- DFM is a component of the chain: `Guardian → DFM → OpenSOVD → Evidence Collector`.
+- DFM remains a component of the diagnostic chain: `Guardian → DFM → OpenSOVD → Evidence Collector`.
+- In parallel, the Evidence Collector subscribes directly to `BatteryTempEvent` and to the Guardian's raw `GuardianEvidenceEvent` decision stream. These direct evidence inputs complement rather than replace DFM/OpenSOVD verification.
 - The class/fault-ID registry is defined by the canonical artifacts (ADR-005); DFM consumes the Guardian's `DetectionClass × DetectionLevel` projection from `guardian_diagnostics.json`.
 - The DFM IPC transport is not fixed by this ADR.
 
@@ -210,7 +221,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - Direct Guardian → OpenSOVD (PLAN) → Rejected: drops required DFM records and the Guardian-vs-diagnostic failure distinction.
 
 **Consequences:**
-- ✅ Satisfies README DoD 4/5.
+- ✅ Satisfies README DoD 4/5 and lets the Evidence Collector compare source input, the Guardian's original decisions and DFM/OpenSOVD visibility.
 - ❌ Reintroduces the DFM/IPC component and its startup/catalog-hash dependency.
 - ❌ PLAN.md “DFM leave out” is superseded and must be reconciled.
 
@@ -221,7 +232,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - Current focus is the deterministic single-host evidence path.
 
 **Decision:**
-- v1 delivers `ASC → CAN Provider → Data Broker → VSS Publisher → Guardian → DFM → OpenSOVD → Evidence Collector`.
+- v1 delivers the single-host flow in parallel branches: the VSS Publisher sends `BatteryTempEvent` to both Guardian and Evidence Collector; the Guardian publishes every internal detection transition unchanged as `GuardianEvidenceEvent` to the Evidence Collector and separately projects configured detections into DFM; DFM continues through OpenSOVD to the Evidence Collector.
 - openDuT (campaign supervisor) and Ankaios are specified but not implemented in v1.
 - The transport-fault injection mechanism remains open.
 
