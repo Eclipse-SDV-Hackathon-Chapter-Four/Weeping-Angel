@@ -37,3 +37,7 @@ is not authoritative) — they do not become open issues here.
 - **Description**: Every DFM fault change is also published as JSON `GuardianFaultEvent` on `//guardian/1001/1/8001`; aggregation moved to `guardian_faults.rs`, DFM and uProtocol channels independent (ADR-007).
 - **Notes**: Transitions plus startup baseline only. 41 Rust tests pass; Clippy (`-D warnings`) and rustfmt clean in the dev-container image.
 
+### 2026-10-06 - Component & channel specification (product/doc/architecture)
+- **Status**: In Progress
+- **Description**: Draft `product/doc/architecture/components_and_channels.md`: component overview (C1–C15), edge overview (E1–E18), short per-component/channel specs, and option analyses for mitigation, DFM IPC transport, `run_id` entry, collector correlation and report generation.
+- **Notes**: Decisions recorded as ADR-004 (source timestamp as identity, receive-timeout detection; supersedes ADR-001), ADR-005 (DFM reinstated), ADR-006 (v1 scope), ADR-007 (mitigation M1, iceoryx2 DFM IPC, `run_id` A+C, `verdict.json`→MD, Toxiproxy) and ADR-008 (contract YAML + model doc authoritative). Doc deepened to payload level with sequence diagram, fault-class mapping and failure-mode matrix. Still open: periodic Guardian state/snapshot RID (if any). Transport reorder deferred per ADR-009 (no native Toxiproxy toxic). `transport.duplicate`/`STREAM_DUPLICATE` added to the contract YAML.
