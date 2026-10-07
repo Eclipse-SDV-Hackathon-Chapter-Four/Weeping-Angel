@@ -477,6 +477,12 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 > a loopback address with `--observer-addr 127.0.0.1:8090`. The module, HTTP+SSE
 > frontend, in-process coupling, read-only scope and not-DoD-critical status of
 > this decision are unchanged.
+>
+> **Amendment (2026-10-07, ADR-018):** the observer gains a read-only export
+> surface — `GET /snapshot.json`, `GET /export.html`, and `--dump-html FILE` —
+> so the frozen final state can be archived as a self-contained HTML document.
+> The read-only, not-DoD-critical status is unchanged; exported documents are
+> illustrative only and never a source of evaluation facts.
 **Context:**
 - A browser view of a running campaign experiment is wanted: live battery signals, model ranges, detected fault classes, and the injected incidents on one relative-time axis.
 - The Evidence Collector already subscribes to the battery stream and the Guardian fault-event stream and holds the correlation state; candidate collector→UI paths were REST/SSE, library binding, iceoryx2 IPC, and uProtocol.
@@ -528,3 +534,36 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ❌ The bridge must pass the CAN `TimeStamp` through the Data Broker/VSS path first (ADR-013 migration): until then the CAN value is unavailable at the bridge, so the migration and this change land together.
 - ❌ Contract churn: contract YAML, Guardian emit path, collector decoding, and the live observer (ADR-016) must be updated; `t_ms` in old reports remains anchoring-based (noted per report).
 - ❌ Baseline/startup fault events without a causing sample (DFM startup baseline) carry no `timestamp_ms`; the collector reports them as unsplaced.
+
+### ADR-018: Standalone Evidence Reporter rendering the collector JSON (2026-10-07)
+
+**Context:**
+- ADR-007 and the test-harness spec (§8.6) fix the reporting direction: a canonical machine-readable result (`verdict.json`) and a derived human-readable Markdown report; Markdown must not contain facts absent from the JSON.
+- ADR-014 §7 assigns report derivation to the runner and retains `report.md` under `evidence/<run-id>/`, but no renderer exists. The current campaign output (`reports/campaign-<ts>/<run>/report.json` + `summary.txt`) has no report layer.
+- The available inputs today (collector `report.json`, bundle files, logs, `guardian_diagnostics.json`) support injection ⊃ expectation ⊃ observation ⊃ DFM/OpenSOVD visibility ⊃ verdict and timing; mitigation and the SOVD status triple are not recorded.
+- The Live Observer (ADR-016) can expose its final state, but injecting it into the report must not turn UI output into a source of evaluation truth.
+
+**Decision:**
+- Introduce a **standalone component** `product/components/evidence_reporter/` (own README, own tests), invoked by the campaign runner (`tools/run_campaign.sh`) and per run by `tools/run_case.sh`.
+- **Python with minimal dependencies** (standard library plus `PyYAML`); no templating engine and no execution or verdict logic.
+- The reporter renders against the **current Evidence Collector `report.json` schema**. Run/campaign/scenario identities are derived from the directory paths and sibling `experiment.yaml`, not from top-level JSON fields; a future frozen `verdict.json` may supersede this schema later.
+- Outputs, following the **current** `reports/campaign-<ts>/…` structure and **not committed**: per-run `report.md` (next to `report.json`) and campaign-level `evidence_report.md`. Both granularities are produced.
+- **Markdown is presentation only** and GitHub-safe (no `<script>`/`<iframe>`/`<style>`); evaluation facts stay in the JSON. The reporter joins the fault catalog from `guardian_diagnostics.json` and surfaces per-run evidence, expected-vs-observed transitions, DFM/OpenSOVD visibility, timing, and veridct rationale.
+- Missing chain links are rendered as **explicit placeholders**, never inferred: mitigation (v1 event-only), the SOVD `testFailed`/`confirmedDtc`/`warningIndicator` triple (not captured), and unmapped Guardian warnings.
+- The observer export (Option C) is adopted as part of the reporting pipeline: the observer gains `GET /snapshot.json` and `--dump-html` (amendment to ADR-016); the runner triggers capture, and the reporter links `observer.html` and embeds `observer.png`. Observer artifacts are illustrative, not evaluation facts.
+- The detective-story narrative (injected class → culprit/witness) is **out of scope** for v1; `generated_at` appears in the report header only and is excluded from comparisons.
+- The normative document is `product/doc/reporting/evidence_report.md`.
+
+**Alternatives Considered:**
+- Module of the Evidence Collector or the runner instead of a standalone component → Rejected: separates rendering from evaluation (ADR-007) and keeps the runner free of Python report code.
+- Rust implementation near the collector → Rejected for v1: the runner/harness ecosystem is Python; rendering needs no runtime-integration depth.
+- Freeze a new `verdict.json` schema before rendering → Deferred: render against today's `report.json` now; the schema can be frozen later without blocking the report layer.
+- Embed the interactive observer HTML (script/canvas) or use a screenshot as a fact source → Rejected: GitHub strips scripts/styles, and UI output must not carry evaluation facts (ADR-007/§8.6).
+- Add hashes or a provenance artifact → Rejected (ADR-014).
+
+**Consequences:**
+- ✅ Human-readable, evidence-linked PASS/FAIL/INCONCLUSIVE reports per run and per campaign, derived only from canonical JSON (ADR-007).
+- ✅ Reporting stays reproducible and GitHub-renderable; the runner remains an orchestrator.
+- ✅ ADR-016 gains a small, read-only export surface restricted to the `observer` feature.
+- ❌ A new Python component and its tests must be maintained; the report quality tracks the (currently unfrozen) collector schema.
+- ❌ Complete evidence-chain presentation (mitigation, SOVD status triple, unmapped warnings) awaits collector/DFM instrumentation; until then those cells are explicit placeholders.

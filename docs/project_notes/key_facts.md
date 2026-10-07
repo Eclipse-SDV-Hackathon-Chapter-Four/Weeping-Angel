@@ -91,6 +91,15 @@ Never store credentials here — this file is committed to git.
 - Correlates source battery input, original Guardian decisions, injection ground truth, and DFM/OpenSOVD visibility; the direct subscriptions do not replace the diagnostic chain
 - Live Scenario Observer: feature-flagged module (`observer`) plus CLI option `--observer` inside the collector binary; serves a read-only static SSE frontend from in-process collector state (ADR-016, `product/doc/observer/live_observer.md`); the end2end-runner starts it with `E2E_OBSERVER=1`, and `tools/run_campaign.sh` starts it by default (`E2E_OBSERVER=0` disables)
 
+## Evidence Reporter (implemented v1 — ADR-018)
+
+- Component: `product/components/evidence_reporter/` (Python, stdlib; PyYAML optional); CLI `source/evidence_reporter.py run|campaign`; normative spec `product/doc/reporting/evidence_report.md`
+- Renders the current collector `report.json` (identities derived from `reports/campaign-<ts>/<campaign>--<scenario>/` paths + `experiment.yaml`) into per-run `report.md` and campaign `evidence_report.md`; outputs not committed
+- Joins the fault catalog from `product/config/battery_guardian/guardian_diagnostics.json`; GitHub-safe Markdown, presentation only
+- Wired into `tools/run_case.sh` (per run) and `tools/run_campaign.sh` (campaign)
+- Observer export (ADR-018 amendment to ADR-016): `GET /snapshot.json`, `GET /export.html`, `--dump-html FILE` on port 8090; `run_case.sh` passes `--dump-html`, the reporter links `observer.html` and embeds `observer.png`
+- Missing chain links are explicit placeholders: mitigation (event-only), SOVD `testFailed`/`confirmedDtc`/`warningIndicator` (not captured), unmapped Guardian warnings
+
 ## CAN Assets (`demo/can/`)
 
 - Frame 0x100 (256) `BatteryTemperature`, 8 bytes, 100 ms cycle: CellTempAvg (bits 0–15), CellTempMax (16–31), CellTempMin (32–47), StateOfCharge (48–63); scale 0.5, offset −40 (SoC offset 0)
