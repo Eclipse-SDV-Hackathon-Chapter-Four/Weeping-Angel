@@ -33,3 +33,9 @@ RUN python3 -m venv /home/vscode/.venv \
     && /home/vscode/.venv/bin/pip install --no-cache-dir -r "${KUKSA_CAN_PROVIDER_DIR}/requirements.in" \
     && rm /tmp/dev-requirements.txt \
     && chown -R vscode:vscode /home/vscode/.venv
+
+# Chromium (headless) for screenshots of the generated HTML reports, e.g.
+#   chromium --headless --no-sandbox --screenshot=report.png file:///app/report.html
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y --no-install-recommends chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
