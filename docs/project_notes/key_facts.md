@@ -31,7 +31,7 @@ Never store credentials here — this file is committed to git.
 
 - Component: `product/components/guardien/` (directory spelling is intentional in the current layout)
 - Rust crate: `Cargo.toml`; source files live in `source/`; binary name is `guardian`
-- Configuration: `product/components/guardien/config/battery_guardian.yaml`; startup fails on missing or inconsistent mandatory parameters
+- Configuration: `product/config/battery_guardian.yaml`; startup fails on missing or inconsistent mandatory parameters
 - Input: existing BatteryTempEvent uProtocol URI `battery-vss/9001/1/9001`; listener stores `temp_min`, `temp_avg`, `temp_max`, `soc`, and local receive time only
 - Evaluation: 100 ms periodic cycle, 500 ms missing-packet timeout, each sample generation evaluated at most once (ADR-004)
 - Detections: stream stale; absolute temperature, ordering, spread, hotspot and temperature-rate violations; SoC range/step violations; excitation-gated stuck signals
