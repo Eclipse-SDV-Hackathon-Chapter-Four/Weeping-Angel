@@ -29,7 +29,7 @@ Never store credentials here — this file is committed to git.
 
 ## Product Guardian
 
-- Component: `product/components/guardien/` (directory spelling is intentional in the current layout)
+- Component: `product/components/guardien/`
 - Rust crate: `Cargo.toml`; source files live in `source/`; binary name is `guardian`
 - Configuration: `product/config/battery_guardian.yaml`; startup fails on missing or inconsistent mandatory parameters
 - Input: existing BatteryTempEvent uProtocol URI `battery-vss/9001/1/9001`; listener stores `temp_min`, `temp_avg`, `temp_max`, `soc`, and local receive time only
