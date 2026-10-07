@@ -11,7 +11,7 @@ neither has authority over ADRs; where they conflict, the ADR governs.
 Each decision records: date, context, decision, rejected alternatives, and
 consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 
-### ADR-001: No sequence numbers — Guardian heartbeat counter as time base (2026-10-06)
+### ADR-001: No sequence numbers — Guardian heartbeat counter as time base (2026-10-06) — Superseded by ADR-004
 
 **Context:**
 - Fault-campaign design (PLAN.md, Step 1) considered value faults on a per-message sequence number ("seq-nr") to make message loss, repetition, and ordering detectable.
@@ -83,7 +83,7 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 **Decision:**
 - The product Guardian uses local monotonic receive timestamps (`Instant`) and a monotonically increasing sample-generation counter.
 - A configurable periodic task evaluates each fresh generation once. It reports `STREAM_STALE` when receive age exceeds the configured timeout and clears it on the next fresh sample.
-- No producer timestamp or sequence number is added to `BatteryTempEvent`; all physical-model parameters come from the Guardian YAML configuration.
+- No sequence number is added to `BatteryTempEvent`; all physical-model parameters come from the Guardian YAML configuration. A producer/source timestamp may be carried, but it is **not** used as the Guardian time base (its role is defined by ADR-007).
 - This receive-time decision supersedes ADR-001's not-yet-implemented heartbeat time base for the product Guardian. ADR-001's decision not to add a sequence number remains in force.
 
 **Alternatives Considered:**
@@ -171,3 +171,64 @@ consequences (✅/❌). Number sequentially (ADR-001, ADR-002, ...).
 - ✅ Bus consumers get structured numeric evidence (DFM env data stays string-formatted, max 8 entries).
 - ❌ Subscribers that join after a transition miss it (no retain on Zenoh publish).
 - ❌ Unbounded publish queue: a permanently stalled transport grows memory (transition rate is low).
+
+### ADR-008: Source timestamp as message identity for duplicate/reorder (amends ADR-004) (2026-10-06)
+
+**Context:**
+- ADR-004 keeps the Guardian's time base on receiver-side receive timestamps and dropped ADR-001's heartbeat, but stated that no producer timestamp is added to `BatteryTempEvent`.
+- The README fault classes include `transport.duplicate` / `transport.reorder`, which need message identity; equal payload values alone are insufficient.
+
+**Decision:**
+- No sequence numbers in any payload or component (retained from ADR-001/ADR-004).
+- The detection time base remains receiver-side receive timestamps plus timeouts (staleness, windows, per-sample deltas); ADR-004's receive-time evaluation stands.
+- A producer/source timestamp **is** carried in `BatteryTempEvent` and is used only as message identity for duplicate/reorder detection; it is never the Guardian time base.
+- Amends ADR-004's "no producer timestamp" clause; it does not reintroduce the heartbeat of ADR-001.
+
+**Alternatives Considered:**
+- Keep ADR-004's "no producer timestamp" clause → Rejected: duplicate/reorder cannot be detected without message identity.
+- Add a sequence number → Rejected: already rejected in ADR-001 (frame full; contract churn).
+- Use the source timestamp as time base → Rejected: producer-controlled, not monotonic under replay/pause.
+
+**Consequences:**
+- ✅ `transport.duplicate` / `transport.reorder` become detectable via source-timestamp identity.
+- ✅ The Guardian time base stays independent of replay-controlled wall clocks.
+- ❌ Source timestamp is trusted for identity only; clock skew/rewrite can create false duplicate/reorder signals.
+- ❌ Detection is deferred until the Guardian implements identity-based checks; the injection vocabulary (ADR-005) does not yet define `transport.duplicate`.
+
+### ADR-009: DFM remains in the chain (2026-10-06)
+
+**Context:**
+- PLAN.md proposed “DFM leave out (direct reporting to OpenSOVD)”.
+- README Definition of Done requires DFM records for faulted scenarios and OpenSOVD exposing matching diagnostics; the target architecture is `Guardian → DFM → OpenSOVD`.
+
+**Decision:**
+- DFM is a component of the chain: `Guardian → DFM → OpenSOVD → Evidence Collector`.
+- The class/fault-ID registry is defined by the canonical artifacts (ADR-005); DFM consumes the Guardian's `DetectionClass × DetectionLevel` projection from `guardian_diagnostics.json`.
+- The DFM IPC transport is not fixed by this ADR.
+
+**Alternatives Considered:**
+- Direct Guardian → OpenSOVD (PLAN) → Rejected: drops required DFM records and the Guardian-vs-diagnostic failure distinction.
+
+**Consequences:**
+- ✅ Satisfies README DoD 4/5.
+- ❌ Reintroduces the DFM/IPC component and its startup/catalog-hash dependency.
+- ❌ PLAN.md “DFM leave out” is superseded and must be reconciled.
+
+### ADR-010: v1 scope — full single-host chain; openDuT/Ankaios documented only (2026-10-06)
+
+**Context:**
+- README lists openDuT (Phase 4) and Ankaios (Phase 5) as later maturity levels.
+- Current focus is the deterministic single-host evidence path.
+
+**Decision:**
+- v1 delivers `ASC → CAN Provider → Data Broker → VSS Publisher → Guardian → DFM → OpenSOVD → Evidence Collector`.
+- openDuT (campaign supervisor) and Ankaios are specified but not implemented in v1.
+- The transport-fault injection mechanism remains open.
+
+**Alternatives Considered:**
+- Attempt openDuT/Ankaios in v1 → Rejected: dilutes the evidence path.
+- Freeze the transport-fault mechanism now → Rejected: options still under review.
+
+**Consequences:**
+- ✅ Focused v1; later phases have a documented place in the interface spec.
+- ❌ DoD 7/8 not met in v1 (documented only).
