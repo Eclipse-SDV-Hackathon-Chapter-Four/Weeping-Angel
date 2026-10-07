@@ -31,6 +31,11 @@ use crate::guardian_faults::{
 /// Maximum number of env-data entries attached to a fault record.
 const MAX_ENV_ENTRIES: usize = 8;
 
+/// Pause between baseline publishes. The DFM's iceoryx2 subscriber buffers
+/// only 2 events (iceoryx2 default) and drains them every 10 ms; a burst of all
+/// baseline records would silently overwrite all but the last two.
+const BASELINE_PUBLISH_PAUSE: Duration = Duration::from_millis(20);
+
 /// Cheap, cloneable handle used by the async Guardian to report detections.
 #[derive(Clone)]
 pub struct FaultReporterHandle {
@@ -149,6 +154,7 @@ fn worker(catalog_path: &Path, sovd_path: &str, rx: &Receiver<FaultEvent>, ready
         if let Err(error) = reporter.publish(sovd_path, record) {
             error!(key = *key, %error, "initial baseline publish failed");
         }
+        thread::sleep(BASELINE_PUBLISH_PAUSE);
     }
     info!(
         faults = reporters.len(),
