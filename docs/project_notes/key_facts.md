@@ -19,7 +19,7 @@ Never store credentials here — this file is committed to git.
 - `battery-vss/9001/1/9001` — BatteryTempEvent JSON (source → Guardian and Evidence Collector); carries the unchanged zero-based CAN generation time as `timestamp_ms`
 - `battery-vss/9001/1/9003` — HighTempAlert JSON
 - `guardian-vss/9000/1/9002` — GuardianSnapshot (defined in `demo/services/src/lib.rs`, not yet published)
-- Guardian raw-decision topic (URI/RID still to be fixed in the interface contract) — `GuardianEvidenceEvent` JSON (product Guardian → Evidence Collector); carries every internal detection transition before and independently of DFM mapping (ADR-007)
+- `guardian-vss/9000/1/9003` — GuardianEvidenceEvent JSON (product Guardian → Evidence Collector); raw evidence stream with every internal detection transition, mapped or not, published before and independently of the DFM projection; required fields `run_id` (Guardian startup configuration, `GUARDIAN_RUN_ID`), `detection_class`, `level`, `stage` (`active`/`cleared`), optional `signal`, `evidence` (observed/limit/residual/utilization/interval_ms) and `timestamp_ms` (ADR-017: omitted when there is no causing sample); implemented in `product/components/guardien/source/guardian_uprotocol.rs` (`spawn_evidence`, ADR-007)
 - `guardian/1001/1/8001` — currently implemented mapped `GuardianFaultEvent`; superseded as the Evidence Collector's original-view contract by ADR-007 and to be replaced or kept only as a separate mapped stream
 
 ## Guardian Detection Constants (`demo/services/src/bin/guardian.rs`)

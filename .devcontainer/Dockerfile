@@ -20,3 +20,16 @@ RUN git clone --depth 1 --branch "${KUKSA_CAN_PROVIDER_VERSION}" \
         "  --canport vcan0 --dbc-default ${KUKSA_CAN_PROVIDER_DIR}/dbc_default_values.json \"\$@\"" \
         > /usr/local/bin/kuksa-can-provider \
     && chmod +x /usr/local/bin/kuksa-can-provider
+
+# Python environment for the Evidence Collector / Robot Framework tests and the
+# CAN replay / campaign harness (cantools, python-can, kuksa-client, ...).
+# Baked into the image so .devcontainer/post-create.sh only has to provision it
+# as a fallback; devcontainer.json points VIRTUAL_ENV and PATH at
+# /home/vscode/.venv. requirements.txt is the devcontainer build context.
+COPY requirements.txt /tmp/dev-requirements.txt
+RUN python3 -m venv /home/vscode/.venv \
+    && /home/vscode/.venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /home/vscode/.venv/bin/pip install --no-cache-dir -r /tmp/dev-requirements.txt \
+    && /home/vscode/.venv/bin/pip install --no-cache-dir -r "${KUKSA_CAN_PROVIDER_DIR}/requirements.in" \
+    && rm /tmp/dev-requirements.txt \
+    && chown -R vscode:vscode /home/vscode/.venv
