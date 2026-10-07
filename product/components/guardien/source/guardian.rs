@@ -36,7 +36,7 @@ struct BatteryTempEvent {
     temp_max: f32,
     soc: f32,
     #[serde(default)]
-    _timestamp_ms: Option<u64>,
+    timestamp_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -58,6 +58,14 @@ impl UListener for BatteryTempListener {
                 return;
             }
         };
+        info!(
+            temp_min = event.temp_min,
+            temp_avg = event.temp_avg,
+            temp_max = event.temp_max,
+            soc = event.soc,
+            timestamp_ms = ?event.timestamp_ms,
+            "[EventReceived]"
+        );
 
         let received_at = Instant::now();
         let sample = BatterySample::new(
