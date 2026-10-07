@@ -92,7 +92,11 @@ bash "$TOOLS/run_guardian.sh"
 echo "== collector listening, replaying $(basename "$PREFIX").asc (takes as long as the recording)"
 observer_args=()
 if [ "$E2E_OBSERVER" = 1 ]; then
-  observer_args=(--observer --observer-addr "$E2E_OBSERVER_ADDR")
+  # --dump-html writes the frozen observer state as standalone HTML (ADR-018);
+  # keep it next to the run's report.json so the report can link it.
+  observer_html="$RUN_DIR/observer.html"
+  [ $# -eq 2 ] && observer_html="$(dirname "$2")/observer.html"
+  observer_args=(--observer --observer-addr "$E2E_OBSERVER_ADDR" --dump-html "$observer_html")
 fi
 "$COLLECTOR" "$PREFIX" "${REPORT_ARGS[@]}" "${observer_args[@]}" >"$RUN_DIR/collector.out" 2>"$RUN_DIR/collector.log" &
 collector_pid=$!
@@ -137,6 +141,12 @@ wait "$collector_pid" 2>/dev/null
 verdict=$?
 set -e
 [ "$_timed_out" = 0 ] || { echo "run_case: TIMEOUT treated as INCONCLUSIVE" >&2; exit 2; }
+
+# Evidence Reporter (ADR-018): human-readable report next to the JSON. Non-fatal.
+if [ -n "${2:-}" ] && [ -f "${2:-}" ]; then
+  ( cd "$ROOT" && python3 product/components/evidence_reporter/source/evidence_reporter.py run "$(dirname "$2")" ) \
+    || { echo "run_case: evidence reporter failed (non-fatal)" >&2; set +e; }
+fi
 
 echo "== result"
 cat "$RUN_DIR/collector.out"

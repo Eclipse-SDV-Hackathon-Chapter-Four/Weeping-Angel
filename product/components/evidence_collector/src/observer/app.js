@@ -49,25 +49,35 @@ function trim() {
   state.detections = state.detections.filter(d => d.at_ms >= detCutoff);
 }
 
-const es = new EventSource('/events');
-es.addEventListener('open', () => { statusEl.textContent = 'live'; statusEl.className = 'status live'; });
-es.addEventListener('error', () => { statusEl.textContent = 'disconnected'; statusEl.className = 'status down'; });
-es.addEventListener('snapshot', e => {
-  state = JSON.parse(e.data);
+function applySnapshot(snapshot) {
+  state = snapshot;
   state.samples = state.samples || [];
   state.detections = state.detections || [];
   runEl.textContent = state.run_id ? `run ${state.run_id}` : '';
   schedule();
-});
-es.addEventListener('sample', e => {
-  state.samples.push(JSON.parse(e.data));
-  trim();
-  schedule();
-});
-es.addEventListener('detection', e => {
-  state.detections.push(JSON.parse(e.data));
-  schedule();
-});
+}
+
+// Exported documents embed the final snapshot (ADR-018) and must not open an
+// SSE connection; the live page falls through to the stream below.
+if (window.__OBSERVER_SNAPSHOT__) {
+  statusEl.textContent = 'frozen';
+  statusEl.className = 'status live';
+  applySnapshot(window.__OBSERVER_SNAPSHOT__);
+} else {
+  const es = new EventSource('/events');
+  es.addEventListener('open', () => { statusEl.textContent = 'live'; statusEl.className = 'status live'; });
+  es.addEventListener('error', () => { statusEl.textContent = 'disconnected'; statusEl.className = 'status down'; });
+  es.addEventListener('snapshot', e => applySnapshot(JSON.parse(e.data)));
+  es.addEventListener('sample', e => {
+    state.samples.push(JSON.parse(e.data));
+    trim();
+    schedule();
+  });
+  es.addEventListener('detection', e => {
+    state.detections.push(JSON.parse(e.data));
+    schedule();
+  });
+}
 
 const LEVEL_COLORS = { WARNING: '#e5c07b', VIOLATION: '#e06c75', CRITICAL: '#c678dd' };
 

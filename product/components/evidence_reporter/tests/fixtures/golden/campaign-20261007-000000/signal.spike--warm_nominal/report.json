@@ -1,0 +1,108 @@
+{
+  "case": "/tmp/case",
+  "verdict": "PASS",
+  "replay_end_ms": 5000,
+  "battery_end_ms": 4900,
+  "oracle": {
+    "file": "/tmp/case.oracle.yaml",
+    "allow_unspecified": false,
+    "expected": 2,
+    "not_applicable": 0,
+    "matched": 2,
+    "missing": 0,
+    "not_reached": 0,
+    "unexpected": 0
+  },
+  "injections": [
+    {
+      "run_id": "signal.spike--warm_nominal",
+      "injection_id": "signal-spike-1",
+      "injected_class": "signal.spike",
+      "source_started_at_ms": 1000,
+      "source_finished_at_ms": 1100,
+      "started_at": "1970-01-01T00:00:00Z",
+      "finished_at": null,
+      "duration_ms": 100,
+      "mutations": [
+        {
+          "signal": "temp_max",
+          "operator": "spike",
+          "requested_parameters": {"duration_samples": 1, "delta": 2.0},
+          "executed_values": [42.0]
+        }
+      ],
+      "window_ms": [1000, 2000],
+      "slot_ms": [1000, 4500],
+      "verdict": "PASS",
+      "expected": 2,
+      "matched": 2,
+      "missing": 0,
+      "unexpected": 0,
+      "sovd_missing": 0
+    }
+  ],
+  "transitions": [
+    {
+      "status": "MATCHED",
+      "fault_id": "BatteryTempRate",
+      "detection_class": "PHYSICAL_TEMP_RATE",
+      "level": "VIOLATION",
+      "stage": "Failed",
+      "expected_at_ms": 1000,
+      "observed_at_ms": 1000,
+      "signal": "temp_max",
+      "sovd_visible_at_ms": 1076,
+      "sovd_missing": false,
+      "injection_id": "signal-spike-1"
+    },
+    {
+      "status": "MATCHED",
+      "fault_id": "BatteryTempRate",
+      "detection_class": "PHYSICAL_TEMP_RATE",
+      "level": "VIOLATION",
+      "stage": "Passed",
+      "expected_at_ms": 1200,
+      "observed_at_ms": 1200,
+      "signal": "temp_max",
+      "sovd_missing": false,
+      "injection_id": "signal-spike-1"
+    }
+  ],
+  "fault_events": [
+    {
+      "t_ms": 1000,
+      "fault_id": "BatteryTempRate",
+      "detection_class": "PHYSICAL_TEMP_RATE",
+      "level": "VIOLATION",
+      "stage": "Failed",
+      "baseline": false,
+      "evidence": {
+        "signal": "temp_max",
+        "observed": 10.0,
+        "limit": 8.0,
+        "residual": 2.0,
+        "utilization": 1.25,
+        "interval_ms": 100,
+        "timestamp_ms": 1000
+      }
+    },
+    {
+      "t_ms": 1200,
+      "fault_id": "BatteryTempRate",
+      "detection_class": "PHYSICAL_TEMP_RATE",
+      "level": "VIOLATION",
+      "stage": "Passed",
+      "baseline": false,
+      "evidence": {"signal": "temp_max", "timestamp_ms": 1200}
+    }
+  ],
+  "sovd": {
+    "url": "http://127.0.0.1:7690/sovd/v1/components/battery_guardian/data/faults",
+    "polls": 10,
+    "errors": 0,
+    "activations": [{"t_ms": 1076, "code": "BatteryTempRate"}],
+    "not_visible": [],
+    "unexplained": []
+  },
+  "notes": ["test note"]
+}

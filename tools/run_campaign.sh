@@ -104,6 +104,10 @@ done
 } >>"$SUMMARY"
 
 echo
+# Evidence Reporter (ADR-018): aggregate campaign report, links the per-run ones.
+( cd "$ROOT" && python3 product/components/evidence_reporter/source/evidence_reporter.py campaign "$OUT" ) \
+  || echo "run_campaign: evidence reporter failed (non-fatal)" >&2
+
 echo "== campaign summary ($OUT)"
 cat "$SUMMARY"
 $all_passed

@@ -48,6 +48,7 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 | C13 | Test harness (Robot) | [DEMO] | Transitional driver until C10 exists. |
 | C14 | CAN replay transport mutation | [DEMO] | Logical injection point in C2: changes ASC delivery timing or omits CAN frames. |
 | C15 | Mitigation Actuator (mock) | [DEFERRED] | Closed-loop mitigation (M2) — not in v1. |
+| C16 | Evidence Reporter | [DEMO] | Renders collector JSON into per-run/campaign Markdown; links observer HTML (ADR-018). |
 
 ## 3. Edge overview
 
@@ -72,6 +73,8 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 | E17 | C2/C14 → C3 | generated replay | ASC timing changes / omitted CAN FD frames | [DEMO] |
 | E18 | C13 → C2 | process spawn | legacy `fault_injector` (superseded by C2) | [DEMO] |
 | E19 | C10 → Browser | HTTP + SSE | `0.0.0.0:8090`, snapshot + deltas (ADR-016) | [PLANNED] |
+| E20 | C10 → C16 | file read | `report.json` + bundle; observer HTML/PNG | [DEMO] |
+| E21 | C16 → files | file write | `<run>/report.md`, `<campaign>/evidence_report.md` | [DEMO] |
 
 ## 4. Components (short specs)
 
@@ -144,6 +147,15 @@ Status: **[DEMO]** exists in `demo/`, **[PLANNED]** designed, not built,
 - **Boundary:** no mutation is applied to the uProtocol/Zenoh link. Source
   dropout remains a distinct ground-truth cause even where the resulting ASC
   gap is observationally identical.
+
+### C16 — Evidence Reporter [DEMO, Python, standalone]
+- **I/O:** in `report.json` + experiment bundle + `guardian_diagnostics.json`
+  (E20); out `report.md` / `evidence_report.md` (E21).
+- **Presentation only (ADR-018):** renders the current collector JSON; no
+  verdict or detection logic. GitHub-safe Markdown; missing chain links are
+  explicit placeholders.
+- **Invocation:** `tools/run_case.sh` (per run) and `tools/run_campaign.sh`
+  (campaign). Normative spec: `product/doc/reporting/evidence_report.md`.
 
 ## 5. Channels and payloads
 

@@ -166,6 +166,12 @@ library — never re-derived by hand or in the frontend (ADR-005):
 - `GET /events` — `text/event-stream`; the first event is always `snapshot`,
   followed by `sample`/`detection` deltas. No coalescing.
 - `GET /health` — optional liveness only; not rendered in the UI.
+- `GET /snapshot.json` — the current state as one JSON document (ADR-018
+  export; read-only).
+- `GET /export.html` — the current state as one self-contained, offline-opened
+  HTML document: CSS and JS are inlined and the `snapshot` is injected, so it
+  renders with no server and no SSE connection (ADR-018). It is illustrative
+  only and never a source of evaluation facts.
 - Reconnect: the browser `EventSource` reconnects automatically; because SSE
   has no retain, every reconnect receives a fresh `snapshot`.
 
@@ -192,7 +198,8 @@ library — never re-derived by hand or in the frontend (ADR-005):
 
 - Cargo feature: `observer` (off by default).
 - CLI: `--observer` enables the module; `--observer-addr 0.0.0.0:8090`
-  overrides the bind address.
+  overrides the bind address; `--dump-html FILE` writes the frozen state as one
+  self-contained HTML document when the collector finalizes (ADR-018).
 - Example: `cargo run --features observer -- <prefix> --observer`.
 - With the feature disabled the option is absent and the existing CLI and
   exit-code contract are unchanged.
@@ -209,7 +216,9 @@ library — never re-derived by hand or in the frontend (ADR-005):
 2. The observer serves the live view during the replay.
 3. After replay end and drain, the last view is **frozen** and kept served until
    the process terminates; the collector's drain/finalize/verdict phase is that
-   grace period. The observer is not required to survive the run.
+   grace period. With `--dump-html FILE` the frozen state is written as one
+   self-contained document at finalize (ADR-018). The observer is not required
+   to survive the run.
 4. A follow-run is a new collector process that **overwrites** the previous
    state. The runner terminates the predecessor first, so no port conflict or
    bind-retry is required.
@@ -239,6 +248,8 @@ library — never re-derived by hand or in the frontend (ADR-005):
   to it (via the collector) and §11 limits disappear.
 - **Bookkeeping done:** observer noted in `key_facts.md` (port 8090) and
   `components_and_channels.md` (C10 + E19).
+- **ADR-018:** `GET /snapshot.json`, `GET /export.html` and `--dump-html FILE`
+  added as a read-only export surface consumed by the Evidence Reporter.
 
 ## 13. Testing
 

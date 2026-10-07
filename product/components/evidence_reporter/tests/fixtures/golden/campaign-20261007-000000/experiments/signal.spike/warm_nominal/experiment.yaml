@@ -1,0 +1,4 @@
+schema_version: 1
+experiment_id: signal.spike--warm_nominal
+campaign_id: signal.spike
+scenario_id: warm_nominal

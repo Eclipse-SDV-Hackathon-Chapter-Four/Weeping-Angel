@@ -1,0 +1,8 @@
+schema_version: 1
+status: UNSATISFIABLE
+experiment_id: signal.stuck--cold_nominal
+detail:
+  status: UNSATISFIABLE
+  reason:
+    code: ENCODING_LIMIT
+    detail: 'no DBC-representable candidate trajectory'
