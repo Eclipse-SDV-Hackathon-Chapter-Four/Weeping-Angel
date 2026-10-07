@@ -1,0 +1,20 @@
+# Evidence Collector verdict table: which Guardian detection classes count as
+# the detection of an injected class. Evaluation knowledge of the collector,
+# not a diagnostic mapping (ADR-005): the Guardian never infers the injected
+# class. Based on the "typical observations" in product/doc/mutator/case_mutator_model.md.
+#
+# Only classes that reach //guardian/1001/1/8001 can match, i.e. class/level
+# pairs with a DFM mapping (guardian_diagnostics.json). Utilization warnings
+# (spread/hotspot/rate WARNING) have none and never appear on that topic.
+#
+# An injection passes if a non-baseline `Failed` event of one of its classes
+# arrives within [started_at, finished_at]. An empty list means "no defined
+# expectation" and yields INCONCLUSIVE.
+signal.stuck: [SIGNAL_STUCK]
+signal.spike: [PHYSICAL_TEMP_RATE]
+signal.drift: [PHYSICAL_TEMP_HOTSPOT, PHYSICAL_TEMP_SPREAD]
+signal.out_of_range: [PHYSICAL_TEMP_ABSOLUTE_LIMIT]
+signal.combination: []
+transport.delay: [STREAM_STALE]
+transport.drop: [STREAM_STALE]
+source.dropout: [STREAM_STALE]

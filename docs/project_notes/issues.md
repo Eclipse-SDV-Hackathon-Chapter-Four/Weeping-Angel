@@ -51,3 +51,8 @@ is not authoritative) — they do not become open issues here.
 - **Status**: In Progress
 - **Description**: Draft `product/doc/architecture/components_and_channels.md`: component overview (C1–C15), edge overview (E1–E18), short per-component/channel specs, and option analyses for mitigation, DFM IPC transport, `run_id` entry, collector correlation and report generation.
 - **Notes**: Decisions recorded as ADR-004 (source timestamp as identity and for generation-gap/drop detection, local receive time for timeout/rate evaluation; supersedes ADR-001), ADR-005 (DFM reinstated), ADR-006 (v1 scope), ADR-007 (mitigation M1, iceoryx2 DFM IPC, `run_id` A+C, `verdict.json`→MD, Toxiproxy) and ADR-008 (contract YAML + model doc authoritative). Doc deepened to payload level with sequence diagram, fault-class mapping and failure-mode matrix. Still open: periodic Guardian state/snapshot RID (if any). Transport reorder deferred per ADR-009 (no native Toxiproxy toxic). `transport.duplicate`/`STREAM_DUPLICATE` added to the contract YAML.
+
+### 2026-10-07 - Evidence Collector on GuardianFaultEvent stream
+- **Status**: In Progress
+- **Description**: Collector rewritten for contract v3 (ADR-011): subscribes to `//guardian/1001/1/8001` + `//battery-vss/9001/1/9001`, mutator ground-truth record, window verdict, `expected_observations.yaml`.
+- **Notes**: 18 unit tests and fake-publisher Zenoh runs pass. Open: VSS bridge still sends wall-clock `timestamp_ms` (ADR-008); mutator `started_at` is epoch (D7); `signal.combination` has no expectation; switch to raw `GuardianEvidenceEvent` once published.
