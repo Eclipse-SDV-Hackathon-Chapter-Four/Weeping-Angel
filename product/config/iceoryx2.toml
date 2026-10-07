@@ -1,0 +1,13 @@
+# iceoryx2 settings for the Guardian -> DFM path (fault-lib).
+#
+# iceoryx2 loads $PWD/config/iceoryx2.toml, so tools/run_dfm.sh and
+# tools/run_guardian.sh start both processes from product/. Unset values keep
+# the iceoryx2 defaults.
+#
+# The default subscriber buffer holds 2 samples and overwrites the oldest on
+# overflow. The Guardian reports all fault changes of one cycle within
+# microseconds and the DFM drains every 10 ms, so with 3+ simultaneous
+# changes the first ones were lost silently and never reached OpenSOVD.
+
+[defaults.publish-subscribe]
+subscriber-max-buffer-size = 64
