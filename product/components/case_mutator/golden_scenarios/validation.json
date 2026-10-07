@@ -1,0 +1,135 @@
+{
+  "cold_nominal": {
+    "start": {
+      "min": -13.0,
+      "avg": -11.0,
+      "max": -9.5,
+      "soc": 88.0
+    },
+    "end": {
+      "min": -2.0,
+      "avg": 0.0,
+      "max": 2.5,
+      "soc": 83.5
+    },
+    "detections": {}
+  },
+  "warm_nominal": {
+    "start": {
+      "min": 27.5,
+      "avg": 30.0,
+      "max": 31.5,
+      "soc": 45.0
+    },
+    "end": {
+      "min": 35.5,
+      "avg": 38.0,
+      "max": 39.5,
+      "soc": 52.0
+    },
+    "detections": {}
+  },
+  "hot_nominal": {
+    "start": {
+      "min": 56.5,
+      "avg": 58.5,
+      "max": 60.0,
+      "soc": 78.0
+    },
+    "end": {
+      "min": 56.5,
+      "avg": 58.5,
+      "max": 60.0,
+      "soc": 68.5
+    },
+    "detections": {
+      "THERMAL_LIMIT/WARNING/temp_max": {
+        "count": 200,
+        "first_s": 0.0,
+        "last_s": 19.900000000000002
+      }
+    }
+  },
+  "overtemp_fault": {
+    "start": {
+      "min": 54.0,
+      "avg": 56.0,
+      "max": 57.5,
+      "soc": 84.0
+    },
+    "end": {
+      "min": 70.5,
+      "avg": 72.5,
+      "max": 74.0,
+      "soc": 74.5
+    },
+    "detections": {
+      "PHYSICAL_TEMP_RATE/WARNING/temp_min": {
+        "count": 33,
+        "first_s": 0.6000000000000001,
+        "last_s": 19.8
+      },
+      "PHYSICAL_TEMP_RATE/WARNING/temp_avg": {
+        "count": 33,
+        "first_s": 0.6000000000000001,
+        "last_s": 19.8
+      },
+      "PHYSICAL_TEMP_RATE/WARNING/temp_max": {
+        "count": 33,
+        "first_s": 0.6000000000000001,
+        "last_s": 19.8
+      },
+      "THERMAL_LIMIT/WARNING/temp_max": {
+        "count": 120,
+        "first_s": 3.0,
+        "last_s": 14.9
+      },
+      "THERMAL_LIMIT/CRITICAL/temp_max": {
+        "count": 50,
+        "first_s": 15.0,
+        "last_s": 19.900000000000002
+      },
+      "PHYSICAL_TEMP_ABSOLUTE_LIMIT/VIOLATION/temp_max": {
+        "count": 44,
+        "first_s": 15.600000000000001,
+        "last_s": 19.900000000000002
+      }
+    }
+  },
+  "hotspot_fault": {
+    "start": {
+      "min": 42.5,
+      "avg": 45.0,
+      "max": 46.5,
+      "soc": 72.0
+    },
+    "end": {
+      "min": 44.5,
+      "avg": 47.0,
+      "max": 54.0,
+      "soc": 67.5
+    },
+    "detections": {
+      "PHYSICAL_TEMP_HOTSPOT/WARNING/temp_max": {
+        "count": 10,
+        "first_s": 8.0,
+        "last_s": 8.9
+      },
+      "PHYSICAL_TEMP_HOTSPOT/VIOLATION/temp_max": {
+        "count": 110,
+        "first_s": 9.0,
+        "last_s": 19.900000000000002
+      },
+      "PHYSICAL_TEMP_SPREAD/WARNING/-": {
+        "count": 35,
+        "first_s": 12.5,
+        "last_s": 15.9
+      },
+      "PHYSICAL_TEMP_SPREAD/VIOLATION/-": {
+        "count": 40,
+        "first_s": 16.0,
+        "last_s": 19.900000000000002
+      }
+    }
+  }
+}
