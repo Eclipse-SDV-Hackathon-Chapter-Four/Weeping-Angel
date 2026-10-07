@@ -26,12 +26,21 @@
 //! Usage:
 //!   evidence_collector <prefix> [--fault-topic URI] [--battery-topic URI]
 //!       [--idle-timeout SECS] [--expectations FILE] [--report FILE]
+//!       [--sovd-url URL | --no-sovd]
+//!
+//! OpenSOVD: the DFM's faults are polled every 100 ms from `--sovd-url`
+//! (`dfm_sovd_bridge`) and placed on the same timeline. Every Guardian
+//! `Failed` event must become visible there (`test_failed` or a higher
+//! `occurrence_counter`) within 500 ms (DFM projection slack), otherwise the
+//! case fails; an unreachable OpenSOVD makes it INCONCLUSIVE. `--no-sovd`
+//! skips this check.
 //!
 //! The JSON report goes to `reports/<case name>.json` (relative to the current
 //! directory) unless `--report` names another file.
 //! `ZENOH_CONNECT` selects the Zenoh router.
 //! Exit code: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 usage/input error.
 
+mod sovd;
 mod uprotocol;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +60,11 @@ const DEFAULT_EXPECTATIONS: &str = include_str!("../expected_observations.yaml")
 /// Slack when comparing the battery timeline with the replay end, to absorb
 /// clock jitter when the bridge still sends wall-clock timestamps.
 const REPLAY_END_TOLERANCE_MS: u64 = 200;
+/// A Guardian failure must be visible in OpenSOVD within this time (DFM
+/// projection slack, see key_facts).
+const SOVD_SLACK_MS: u64 = 500;
+/// OpenSOVD may appear up to one poll period "early" on the timeline.
+const SOVD_EARLY_MS: u64 = 100;
 
 /// Injected class -> Guardian detection classes that count as its detection.
 type Expectations = BTreeMap<String, BTreeSet<String>>;
@@ -83,6 +97,8 @@ struct BatteryEvent {
 enum Message {
     Fault(FaultEvent),
     Battery(BatteryEvent),
+    /// One OpenSOVD poll; `None` if the poll failed.
+    Sovd(Option<sovd::Snapshot>),
 }
 
 /// Decodes a payload as fault event (has `fault_id`) or battery event.
@@ -173,12 +189,37 @@ struct TimedFault {
     event: FaultEvent,
 }
 
-/// Places fault events on the battery timeline; also returns the last
-/// battery position (`None` if no battery event arrived).
-fn timeline(messages: &[Message]) -> (Vec<TimedFault>, Option<u64>) {
+/// A fault code becoming active in OpenSOVD, placed on the battery timeline.
+#[derive(Serialize, Clone, Debug)]
+struct SovdActivation {
+    t_ms: Option<u64>,
+    code: String,
+}
+
+#[derive(Default)]
+struct SovdTimeline {
+    polls: usize,
+    errors: usize,
+    activations: Vec<SovdActivation>,
+}
+
+struct Timeline {
+    faults: Vec<TimedFault>,
+    /// Last battery position (`None` if no battery event arrived).
+    battery_end: Option<u64>,
+    sovd: SovdTimeline,
+}
+
+/// Places fault events and OpenSOVD activations on the battery timeline.
+/// An activation is `test_failed` going true or the occurrence counter rising
+/// (one activation per counted occurrence, so short faults between two polls
+/// are not lost).
+fn timeline(messages: &[Message]) -> Timeline {
     let mut origin = None;
     let mut now = None;
     let mut faults = Vec::new();
+    let mut sovd = SovdTimeline::default();
+    let mut previous = sovd::Snapshot::new();
     for m in messages {
         match m {
             Message::Battery(b) => {
@@ -189,9 +230,33 @@ fn timeline(messages: &[Message]) -> (Vec<TimedFault>, Option<u64>) {
                 t_ms: now,
                 event: f.clone(),
             }),
+            Message::Sovd(None) => sovd.errors += 1,
+            Message::Sovd(Some(snapshot)) => {
+                sovd.polls += 1;
+                for (code, state) in snapshot {
+                    let before = previous.get(code).copied().unwrap_or_default();
+                    let counted = state.occurrences.saturating_sub(before.occurrences);
+                    let new = if counted > 0 {
+                        counted
+                    } else {
+                        u32::from(state.active && !before.active)
+                    };
+                    for _ in 0..new {
+                        sovd.activations.push(SovdActivation {
+                            t_ms: now,
+                            code: code.clone(),
+                        });
+                    }
+                }
+                previous = snapshot.clone();
+            }
         }
     }
-    (faults, now)
+    Timeline {
+        faults,
+        battery_end: now,
+        sovd,
+    }
 }
 
 /// Replay length: timestamp of the last `.asc` frame, in ms. Frame lines start
@@ -223,6 +288,21 @@ struct InjectionResult {
     detected_class: Option<String>,
     detected_at_ms: Option<u64>,
     latency_ms: Option<u64>,
+    /// When the detected fault became visible in OpenSOVD.
+    sovd_visible_at_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct SovdReport {
+    url: String,
+    polls: usize,
+    errors: usize,
+    /// Fault codes becoming active in OpenSOVD, in order.
+    activations: Vec<SovdActivation>,
+    /// Guardian failures that never became visible in OpenSOVD in time.
+    not_visible: Vec<TimedFault>,
+    /// OpenSOVD activations without a matching Guardian failure.
+    unexplained: Vec<SovdActivation>,
 }
 
 #[derive(Serialize)]
@@ -234,6 +314,8 @@ struct Report {
     injections: Vec<InjectionResult>,
     /// All non-baseline fault events, in arrival order.
     fault_events: Vec<TimedFault>,
+    /// OpenSOVD visibility (absent with `--no-sovd`).
+    sovd: Option<SovdReport>,
     notes: Vec<String>,
 }
 
@@ -242,9 +324,14 @@ fn evaluate(
     injections: &[Injection],
     expectations: &Expectations,
     replay_end_ms: u64,
+    sovd_url: Option<&str>,
     messages: &[Message],
 ) -> Report {
-    let (faults, battery_end) = timeline(messages);
+    let Timeline {
+        faults,
+        battery_end,
+        sovd,
+    } = timeline(messages);
     let faults: Vec<TimedFault> = faults.into_iter().filter(|f| !f.event.baseline).collect();
     let failures = || faults.iter().filter(|f| f.event.stage == Stage::Failed);
     let mut notes = Vec::new();
@@ -264,6 +351,65 @@ fn evaluate(
         _ => {}
     }
 
+    // OpenSOVD visibility: each Guardian failure is matched to one activation
+    // of its fault code within [t - SOVD_EARLY_MS, t + SOVD_SLACK_MS].
+    let mut visible_at: Vec<Option<u64>> = vec![None; faults.len()];
+    let sovd_report = sovd_url.map(|url| {
+        let mut used = vec![false; sovd.activations.len()];
+        let mut not_visible = Vec::new();
+        for (i, f) in faults.iter().enumerate() {
+            let (Stage::Failed, Some(t)) = (f.event.stage, f.t_ms) else {
+                continue;
+            };
+            let found = sovd.activations.iter().enumerate().position(|(j, a)| {
+                !used[j]
+                    && a.code == f.event.fault_id
+                    && a.t_ms.is_some_and(|ta| ta + SOVD_EARLY_MS >= t && ta <= t + SOVD_SLACK_MS)
+            });
+            match found {
+                Some(j) => {
+                    used[j] = true;
+                    visible_at[i] = sovd.activations[j].t_ms;
+                }
+                None => not_visible.push(f.clone()),
+            }
+        }
+        let unexplained = sovd
+            .activations
+            .iter()
+            .zip(&used)
+            .filter(|(_, used)| !**used)
+            .map(|(a, _)| a.clone())
+            .collect();
+        SovdReport {
+            url: url.to_owned(),
+            polls: sovd.polls,
+            errors: sovd.errors,
+            activations: sovd.activations.clone(),
+            not_visible,
+            unexplained,
+        }
+    });
+    let sovd_reachable = sovd_report.as_ref().is_some_and(|r| r.polls > 0);
+    if let Some(r) = &sovd_report {
+        if r.polls == 0 {
+            notes.push(format!("OpenSOVD not reachable at {} ({} failed polls)", r.url, r.errors));
+            verdict = verdict.max(Verdict::Inconclusive);
+        } else if !r.not_visible.is_empty() {
+            let list: Vec<String> = r
+                .not_visible
+                .iter()
+                .map(|f| format!("{} at {} ms", f.event.fault_id, f.t_ms.unwrap_or(0)))
+                .collect();
+            notes.push(format!(
+                "{} Guardian failure(s) not visible in OpenSOVD within {SOVD_SLACK_MS} ms: {}",
+                list.len(),
+                list.join(", ")
+            ));
+            verdict = Verdict::Fail;
+        }
+    }
+
     if injections.is_empty() && battery_end.is_some() {
         let count = failures().count();
         if count > 0 {
@@ -277,13 +423,22 @@ fn evaluate(
         .map(|inj| {
             let (start, finish) = inj.window;
             let expected = expectations.get(&inj.injected_class).cloned().unwrap_or_default();
-            let hit = failures().find(|f| {
-                expected.contains(&f.event.detection_class)
+            let hit_index = faults.iter().position(|f| {
+                f.event.stage == Stage::Failed
+                    && expected.contains(&f.event.detection_class)
                     && f.t_ms.is_some_and(|t| start <= t && t <= finish)
             });
+            let hit = hit_index.map(|i| &faults[i]);
+            let sovd_visible_at_ms = hit_index.and_then(|i| visible_at[i]);
             let result = if expected.is_empty() {
                 notes.push(format!("{}: no expected class defined for {}", inj.injection_id, inj.injected_class));
                 Verdict::Inconclusive
+            } else if hit.is_some() && sovd_reachable && sovd_visible_at_ms.is_none() {
+                notes.push(format!(
+                    "{}: detected by the Guardian but not visible in OpenSOVD",
+                    inj.injection_id
+                ));
+                Verdict::Fail
             } else if hit.is_some() {
                 Verdict::Pass
             } else if battery_end.is_none_or(|end| end < finish) {
@@ -305,6 +460,7 @@ fn evaluate(
                 detected_class: hit.map(|f| f.event.detection_class.clone()),
                 detected_at_ms: hit.and_then(|f| f.t_ms),
                 latency_ms: hit.and_then(|f| f.t_ms).map(|t| t - start),
+                sovd_visible_at_ms,
             }
         })
         .collect();
@@ -316,6 +472,7 @@ fn evaluate(
         battery_end_ms: battery_end,
         injections: results,
         fault_events: faults,
+        sovd: sovd_report,
         notes,
     }
 }
@@ -327,10 +484,11 @@ struct Args {
     fault_topic: String,
     battery_topic: String,
     idle_timeout: Duration,
+    sovd_url: Option<String>,
 }
 
 const USAGE: &str = "usage: evidence_collector <prefix> [--fault-topic URI] [--battery-topic URI] \
-[--idle-timeout SECS] [--expectations FILE] [--report FILE]";
+[--idle-timeout SECS] [--expectations FILE] [--report FILE] [--sovd-url URL | --no-sovd]";
 
 fn parse_args() -> Result<Args> {
     let mut it = std::env::args().skip(1);
@@ -339,6 +497,7 @@ fn parse_args() -> Result<Args> {
     let mut fault_topic = uprotocol::DEFAULT_FAULT_TOPIC.to_owned();
     let mut battery_topic = uprotocol::DEFAULT_BATTERY_TOPIC.to_owned();
     let mut idle_timeout = Duration::from_secs(3);
+    let mut sovd_url = Some(sovd::DEFAULT_URL.to_owned());
     while let Some(arg) = it.next() {
         let mut value = || it.next().with_context(|| format!("{arg} needs a value"));
         match arg.as_str() {
@@ -346,6 +505,8 @@ fn parse_args() -> Result<Args> {
             "--report" => report = Some(value()?),
             "--fault-topic" => fault_topic = value()?,
             "--battery-topic" => battery_topic = value()?,
+            "--sovd-url" => sovd_url = Some(value()?),
+            "--no-sovd" => sovd_url = None,
             "--idle-timeout" => {
                 idle_timeout = Duration::from_secs_f64(value()?.parse().context("--idle-timeout")?)
             }
@@ -361,6 +522,7 @@ fn parse_args() -> Result<Args> {
         fault_topic,
         battery_topic,
         idle_timeout,
+        sovd_url,
     })
 }
 
@@ -405,9 +567,16 @@ async fn run() -> Result<Verdict> {
         end_ms: replay_end_ms,
         idle_timeout: args.idle_timeout,
     };
-    let messages = uprotocol::collect(&topics, &stop).await?;
+    let messages = uprotocol::collect(&topics, args.sovd_url.as_deref(), &stop).await?;
 
-    let report = evaluate(&args.prefix, &injections, &expectations, replay_end_ms, &messages);
+    let report = evaluate(
+        &args.prefix,
+        &injections,
+        &expectations,
+        replay_end_ms,
+        args.sovd_url.as_deref(),
+        &messages,
+    );
 
     let end = report.battery_end_ms.map_or("-".into(), |e| format!("{e} ms"));
     println!("{}: {:?} (battery timeline up to {end}, replay {} ms)", report.case, report.verdict, report.replay_end_ms);
@@ -415,8 +584,14 @@ async fn run() -> Result<Verdict> {
         let (s, f) = r.window_ms;
         match (&r.detected_class, r.latency_ms) {
             (Some(class), Some(latency)) => println!(
-                "  {} ({}) [{s}, {f}] ms -> {class} after {latency} ms",
-                r.injection.injection_id, r.injection.injected_class
+                "  {} ({}) [{s}, {f}] ms -> {class} after {latency} ms{}",
+                r.injection.injection_id,
+                r.injection.injected_class,
+                match (&report.sovd, r.sovd_visible_at_ms) {
+                    (None, _) => String::new(),
+                    (Some(_), Some(at)) => format!(", in OpenSOVD at {at} ms"),
+                    (Some(_), None) => ", NOT in OpenSOVD".into(),
+                }
             ),
             _ => println!(
                 "  {} ({}) [{s}, {f}] ms -> {:?}",
@@ -428,7 +603,23 @@ async fn run() -> Result<Verdict> {
     println!("  {} failure event(s) in total", failures.len());
     for f in &failures {
         let t = f.t_ms.map_or("before stream".into(), |t| format!("{t} ms"));
-        println!("    {t}: {} / {} ({})", f.event.detection_class, f.event.level, f.event.fault_id);
+        let missing = report.sovd.as_ref().is_some_and(|r| {
+            r.not_visible
+                .iter()
+                .any(|n| n.t_ms == f.t_ms && n.event.fault_id == f.event.fault_id)
+        });
+        let mark = if missing { "   <- not in OpenSOVD" } else { "" };
+        println!("    {t}: {} / {} ({}){mark}", f.event.detection_class, f.event.level, f.event.fault_id);
+    }
+    if let Some(r) = &report.sovd {
+        println!(
+            "  OpenSOVD: {} polls ({} failed), {} activation(s), {} failure(s) not visible, {} unexplained",
+            r.polls,
+            r.errors,
+            r.activations.len(),
+            r.not_visible.len(),
+            r.unexplained.len()
+        );
     }
     for note in &report.notes {
         println!("  note: {note}");
@@ -500,6 +691,7 @@ mod tests {
                     out.push(match m {
                         Message::Fault(f) => Message::Fault(f.clone()),
                         Message::Battery(b) => Message::Battery(b.clone()),
+                        Message::Sovd(s) => Message::Sovd(s.clone()),
                     });
                 }
             }
@@ -509,7 +701,76 @@ mod tests {
 
     fn check(ground_truth: &str, messages: &[Message]) -> Report {
         let injections = parse_ground_truth(ground_truth).unwrap();
-        evaluate("test", &injections, &expectations(), END, messages)
+        evaluate("test", &injections, &expectations(), END, None, messages)
+    }
+
+    fn sovd(code: &str, active: bool, occurrences: u32) -> Message {
+        Message::Sovd(Some(sovd::Snapshot::from([(
+            code.to_owned(),
+            sovd::FaultState { active, occurrences },
+        )])))
+    }
+
+    fn check_sovd(ground_truth: &str, messages: &[Message]) -> Report {
+        let injections = parse_ground_truth(ground_truth).unwrap();
+        evaluate("test", &injections, &expectations(), END, Some("http://sovd"), messages)
+    }
+
+    /// Stuck case: Guardian SIGNAL_STUCK at 5300 ms (fault id FaultSIGNAL_STUCK).
+    fn stuck_detected(sovd_extra: &[(u64, Message)]) -> Vec<Message> {
+        let mut extra = vec![(5300, fault("SIGNAL_STUCK", Stage::Failed))];
+        extra.extend(sovd_extra.iter().map(|(t, m)| {
+            (*t, match m {
+                Message::Sovd(s) => Message::Sovd(s.clone()),
+                _ => unreachable!(),
+            })
+        }));
+        let mut m = stream(0, &extra);
+        m.insert(0, sovd("FaultSIGNAL_STUCK", false, 0));
+        m
+    }
+
+    #[test]
+    fn sovd_visible_within_slack_passes() {
+        let r = check_sovd(STUCK, &stuck_detected(&[(5600, sovd("FaultSIGNAL_STUCK", true, 1))]));
+        assert_eq!(r.verdict, Verdict::Pass);
+        assert_eq!(r.injections[0].sovd_visible_at_ms, Some(5600));
+        assert!(r.sovd.unwrap().not_visible.is_empty());
+    }
+
+    #[test]
+    fn sovd_too_late_or_missing_fails() {
+        for extra in [vec![(6000, sovd("FaultSIGNAL_STUCK", true, 1))], vec![]] {
+            let r = check_sovd(STUCK, &stuck_detected(&extra));
+            assert_eq!(r.verdict, Verdict::Fail);
+            assert_eq!(r.injections[0].verdict, Verdict::Fail);
+            assert_eq!(r.sovd.unwrap().not_visible.len(), 1);
+        }
+    }
+
+    #[test]
+    fn sovd_short_fault_counted_by_occurrence_counter() {
+        // Already cleared again when polled, but the counter went up.
+        let r = check_sovd(STUCK, &stuck_detected(&[(5400, sovd("FaultSIGNAL_STUCK", false, 1))]));
+        assert_eq!(r.verdict, Verdict::Pass);
+    }
+
+    #[test]
+    fn sovd_unreachable_is_inconclusive() {
+        let mut m = stream(0, &[(5300, fault("SIGNAL_STUCK", Stage::Failed))]);
+        m.insert(0, Message::Sovd(None));
+        let r = check_sovd(STUCK, &m);
+        assert_eq!(r.verdict, Verdict::Inconclusive);
+        assert_eq!(r.sovd.unwrap().errors, 1);
+    }
+
+    #[test]
+    fn sovd_activation_without_guardian_failure_is_unexplained() {
+        let mut m = stream(0, &[(4000, sovd("BatteryTempRate", true, 1))]);
+        m.insert(0, sovd("BatteryTempRate", false, 0));
+        let r = check_sovd("[]", &m);
+        assert_eq!(r.verdict, Verdict::Pass);
+        assert_eq!(r.sovd.unwrap().unexplained.len(), 1);
     }
 
     const STUCK: &str = r#"{"injection_id": "signal_stuck", "injected_class": "signal.stuck",
@@ -657,6 +918,7 @@ mutations:
             std::slice::from_ref(inj),
             &expectations(),
             END,
+            None,
             &stream(0, &[(2500, fault("PHYSICAL_TEMP_ABSOLUTE_LIMIT", Stage::Failed))]),
         );
         assert_eq!(r.verdict, Verdict::Pass);

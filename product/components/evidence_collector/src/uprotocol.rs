@@ -64,11 +64,19 @@ async fn open_transport() -> Result<Arc<dyn UTransport>> {
     Ok(Arc::new(transport))
 }
 
-/// Subscribes to both topics and collects messages in arrival order until
-/// `stop` is met or Ctrl-C is pressed.
-pub async fn collect(topics: &[UUri], stop: &StopCondition) -> Result<Vec<Message>> {
+/// Subscribes to both topics (and polls OpenSOVD at `sovd_url`, if given) and
+/// collects messages in arrival order until `stop` is met or Ctrl-C is pressed.
+pub async fn collect(
+    topics: &[UUri],
+    sovd_url: Option<&str>,
+    stop: &StopCondition,
+) -> Result<Vec<Message>> {
     let transport = open_transport().await?;
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let poller = sovd_url.map(|url| {
+        eprintln!("polling OpenSOVD at {url}");
+        crate::sovd::spawn_poller(url.to_owned(), tx.clone())
+    });
     let listener: Arc<dyn UListener> = Arc::new(Forwarder { tx });
     for topic in topics {
         transport
@@ -80,35 +88,51 @@ pub async fn collect(topics: &[UUri], stop: &StopCondition) -> Result<Vec<Messag
 
     let mut messages = Vec::new();
     let mut origin_ms = None;
-    let mut deadline = None;
+    // End of replay seen: stop at this point (grace period for late events).
+    let mut end_deadline: Option<tokio::time::Instant> = None;
+    // Idle timeout counts only battery/fault messages, not OpenSOVD polls.
+    let mut last_activity: Option<tokio::time::Instant> = None;
     loop {
+        let deadline = match (last_activity, end_deadline) {
+            (None, _) => None,
+            (Some(a), end) => {
+                let idle = a + stop.idle_timeout;
+                Some(end.map_or(idle, |e| e.min(idle)))
+            }
+        };
         let next = async {
-            match (origin_ms, deadline) {
-                (None, _) => rx.recv().await,
-                (Some(_), Some(at)) => tokio::time::timeout_at(at, rx.recv()).await.ok().flatten(),
-                (Some(_), None) => {
-                    tokio::time::timeout(stop.idle_timeout, rx.recv()).await.ok().flatten()
-                }
+            match deadline {
+                None => Some(rx.recv().await),
+                Some(at) => tokio::time::timeout_at(at, rx.recv()).await.ok(),
             }
         };
         tokio::select! {
             message = next => match message {
-                Some(message) => {
-                    if let Message::Battery(b) = &message {
-                        let origin = *origin_ms.get_or_insert(b.timestamp_ms);
-                        let t = b.timestamp_ms.saturating_sub(origin);
-                        if deadline.is_none() && t + crate::REPLAY_END_TOLERANCE_MS >= stop.end_ms {
-                            eprintln!("replay end reached at {t} ms, waiting {:?} for late events", stop.idle_timeout);
-                            deadline = Some(tokio::time::Instant::now() + stop.idle_timeout);
+                Some(Some(message)) => {
+                    match &message {
+                        Message::Battery(b) => {
+                            last_activity = Some(tokio::time::Instant::now());
+                            let origin = *origin_ms.get_or_insert(b.timestamp_ms);
+                            let t = b.timestamp_ms.saturating_sub(origin);
+                            if end_deadline.is_none() && t + crate::REPLAY_END_TOLERANCE_MS >= stop.end_ms {
+                                eprintln!("replay end reached at {t} ms, waiting {:?} for late events", stop.idle_timeout);
+                                end_deadline = Some(tokio::time::Instant::now() + stop.idle_timeout);
+                            }
                         }
-                    } else if let Message::Fault(f) = &message {
-                        if !f.baseline {
-                            eprintln!("fault event: {} {} {:?}", f.detection_class, f.level, f.stage);
+                        Message::Fault(f) => {
+                            if last_activity.is_some() {
+                                last_activity = Some(tokio::time::Instant::now());
+                            }
+                            if !f.baseline {
+                                eprintln!("fault event: {} {} {:?}", f.detection_class, f.level, f.stage);
+                            }
                         }
+                        Message::Sovd(_) => {}
                     }
                     messages.push(message);
                 }
-                None if deadline.is_some() => break,
+                Some(None) => break, // all senders gone
+                None if end_deadline.is_some_and(|e| tokio::time::Instant::now() >= e) => break,
                 None => {
                     eprintln!("nothing received for {:?}, stopping", stop.idle_timeout);
                     break;
@@ -121,6 +145,9 @@ pub async fn collect(topics: &[UUri], stop: &StopCondition) -> Result<Vec<Messag
         }
     }
 
+    if let Some(poller) = poller {
+        poller.abort();
+    }
     for topic in topics {
         let _ = transport.unregister_listener(topic, None, listener.clone()).await;
     }
