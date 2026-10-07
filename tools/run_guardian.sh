@@ -38,7 +38,8 @@ export RUST_LOG="${RUST_LOG:-guardian=info,battery_guardian=info,info}"
 mkdir -p "$RUN_DIR"
 
 if [ -x "$GUARDIAN_BIN" ] ; then
-    "$GUARDIAN_BIN" >"$RUN_DIR/guardian.log" 2>&1 &
+    # From product/: iceoryx2 reads config/iceoryx2.toml there (subscriber buffer)
+    (cd "$ROOT_DIR/product" && exec "$GUARDIAN_BIN") >"$RUN_DIR/guardian.log" 2>&1 &
     wait_http "http://127.0.0.1:$PORT/health" "Guardian"
 else
     die "Guardian binary $GUARDIAN_BIN not found, did you build it?"

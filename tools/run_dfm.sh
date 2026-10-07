@@ -30,7 +30,8 @@ mkdir -p "$RUN_DIR"
 if [ -x $DFM_BIN ] ; then
     rm -rf "$DFM_STORAGE"
     mkdir -p "$DFM_STORAGE"
-    "$DFM_BIN" --catalog-dir "$CATALOG_DIR" --storage-dir "$DFM_STORAGE" >"$RUN_DIR/dfm.log" 2>&1 &
+    # From product/: iceoryx2 reads config/iceoryx2.toml there (subscriber buffer)
+    (cd "$ROOT_DIR/product" && exec "$DFM_BIN" --catalog-dir "$CATALOG_DIR" --storage-dir "$DFM_STORAGE") >"$RUN_DIR/dfm.log" 2>&1 &
 else
     fail "DFM binary $DFM_BIN not found, did you build it?" 
 fi
