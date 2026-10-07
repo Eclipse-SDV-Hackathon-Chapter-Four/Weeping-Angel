@@ -9,6 +9,11 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
+### 2026-10-07 - Map CAN TimeStamp into VSS (SourceTimestamp)
+- **Status**: In Progress
+- **Description**: `product/config/vss_dbc.json` maps the DBC `TimeStamp` to `Vehicle.Powertrain.TractionBattery.SourceTimestamp` (`uint32`, ms); `val.proto` documents it as `Datapoint.uint32`; `product/config/vss_overlay.json` is loaded by `tools/start_databroker.sh`. `vss_bridge` now sets `timestamp_ms` from `SourceTimestamp` (one event per frame, incomplete samples dropped and logged) instead of `now_ms()`.
+- **Notes**: Verified in the dev container: 5 bridge unit tests pass; replay of `battery_temp_with_ts.asc` (140 frames) yields correct source timestamps 0–13900 ms. With `interval_ms: 100` only 91 frames arrive (49 whole frames throttled by receive jitter → 200-ms gaps → false `STREAM_GENERATION_GAP`); with `interval_ms: 0` all 140 arrive. Set to `interval_ms: 50` (2026-10-07): 140/140 frames, all 100-ms deltas. Frames arriving < 50 ms apart (e.g. bursts after replay delay) are still throttled. Open: bridge proto copy differs from `product/config/proto` by the comment only.
+
 ### 2026-10-07 - Golden-run orchestration runner (end2end-runner)
 - **Status**: Resolved
 - **Description**: Added `product/components/end2end-runner/` with `run_golden.sh` (bash, dev-container target) + README: builds components, starts zenoh/databroker/vss_publisher once, resets Guardian+DFM+SOVD per case, runs the collector per case, aggregates tri-state verdicts. Registered cases: `baseline` (nominal template, empty ground truth) and `signal_out_of_range` (mutator-generated).

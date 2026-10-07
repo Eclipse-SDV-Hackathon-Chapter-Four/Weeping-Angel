@@ -77,10 +77,13 @@ zenohd -l tcp/127.0.0.1:7447 --no-multicast-scouting
 Started via `tools/start_databroker.sh` (skips if port is taken):
 
 ```sh
-databroker --address 127.0.0.1 --port 55555 --vss "$KUKSA_VSS_FILE" --insecure
+databroker --address 127.0.0.1 --port 55555 --vss "$KUKSA_VSS_FILE,product/config/vss_overlay.json" --insecure
 ```
 
-`KUKSA_VSS_FILE` is set by the dev container image.
+`KUKSA_VSS_FILE` is set by the dev container image. The overlay adds custom
+product paths missing from the standard catalogue
+(`Vehicle.Powertrain.TractionBattery.SourceTimestamp`, mapped from the CAN
+`TimeStamp`); the feeder exits if any mapped path is unknown to the broker.
 
 ### vss_publisher — VSS uProtocol bridge (C5)
 
