@@ -1,0 +1,25 @@
+[package]
+name = "battery-guardian"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "source/lib.rs"
+
+[[bin]]
+name = "guardian"
+path = "source/guardian.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+up-rust = "0.9"
+up-transport-zenoh = "0.9"
+zenoh = { version = "1", features = ["unstable"] }
