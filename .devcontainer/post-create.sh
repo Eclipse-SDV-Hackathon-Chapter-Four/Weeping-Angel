@@ -16,6 +16,10 @@ if ! "$HOME/.venv/bin/python" -c "import robot, requests, yaml, jsonschema, can,
   "$HOME/.venv/bin/pip" install --quiet -r product/components/kuksa-can-provider/requirements.in
 fi
 
+# Make the prepared venv fully accessible to any user (read, write, execute), so
+# a shell started as the host UID/GID can install packages without sudo.
+[ -d "$HOME/.venv" ] && chmod -R a+rwX "$HOME/.venv" || true
+
 echo "rustc:     $(rustc --version)"
 echo "protoc:    $(protoc --version)"
 echo "python:    $("$HOME/.venv/bin/python" --version)"

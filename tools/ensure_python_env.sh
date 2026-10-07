@@ -5,6 +5,12 @@
 # mirrors run_golden.sh's ensure_python_env (E2E_VENV convention).
 ensure_python_env() {
   local venv="${E2E_VENV:-$HOME/.venv}" py
+  # Prefer the image-baked shared venv when the current HOME has none, so any
+  # user (e.g. the host UID/GID via tools/docker_shell.sh) uses the prepared one.
+  if [ -z "${E2E_VENV:-}" ] && [ ! -x "$HOME/.venv/bin/python" ] \
+      && [ -x /home/vscode/.venv/bin/python ]; then
+    venv=/home/vscode/.venv
+  fi
   py="$venv/bin/python"
   ROOT_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   if [ ! -x "$py" ] || ! "$py" -c "import cantools, can, yaml" >/dev/null 2>&1; then
@@ -14,6 +20,9 @@ ensure_python_env() {
       -r "$ROOT_ENV/.devcontainer/requirements.txt" \
       -r "$ROOT_ENV/product/components/kuksa-can-provider/requirements.in" >&2 || return 1
   fi
+  # Keep the environment usable for other users (best effort; no-op if already
+  # world-accessible or if we do not own the files).
+  chmod -R a+rwX "$venv" 2>/dev/null || true
   export PATH="$venv/bin:$PATH"
   "$py" -c "import cantools, can, yaml" >/dev/null 2>&1 || return 1
   return 0

@@ -39,3 +39,10 @@ RUN python3 -m venv /home/vscode/.venv \
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends chromium fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# Make the prepared venv fully accessible to any user (read, write, execute),
+# so a container started as the host UID/GID (tools/docker_shell.sh) can install
+# packages into it without sudo. Appended as its own layer to keep the venv
+# layer cached.
+RUN chmod 755 /home/vscode \
+    && chmod -R a+rwX /home/vscode/.venv

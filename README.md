@@ -2,6 +2,18 @@
 
 See [PLAN.md](PLAN.md) for our updated plan.
 
+Build the container:
+```sh
+docker build -f .devcontainer/Dockerfile -t weeping-angel-devcontainer:latest .devcontainer
+```
+
+Run the benchmark:
+```sh
+tools/docker_shell.sh tools/run_campaign.sh
+```
+
+Observe the run at http://127.0.0.1:8090
+
 > Every fault leaves evidence. Solve the case.
 
 ## The Challenge
