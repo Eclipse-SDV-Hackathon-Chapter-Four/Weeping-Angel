@@ -1,6 +1,6 @@
 [submodule "opensovd-core"]
-	path = opensovd-core
+	path = product/components/opensovd-core
 	url = https://github.com/eclipse-opensovd/opensovd-core.git
 [submodule "fault-lib"]
-	path = fault-lib
+	path = product/components/fault-lib
 	url = https://github.com/eclipse-opensovd/fault-lib.git

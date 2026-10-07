@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
 die() { 
-    printf "$*" >&2
+    echo "$*" >&2
     exit 1
 }
 
@@ -21,7 +21,7 @@ wait_http() {   # wait_http <url> <label> [attempts]
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_DIR="$ROOT_DIR/run/"
-OPENSOVD_BIN="$ROOT_DIR/opensovd-core/target/debug/opensovd-gateway"
+OPENSOVD_BIN="$ROOT_DIR/product/components/opensovd-core/target/debug/opensovd-gateway"
 GATEWAY_URL="http://127.0.0.1:7690"
 
 mkdir -p "$RUN_DIR"
@@ -33,4 +33,4 @@ else
     die "OpenSOVD binary $OPENSOVD_BIN not found, did you build it?" 
 fi
 
-puts "OpenSOVD Gateway up and running"
+printf "OpenSOVD Gateway up and running"

@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
 fail() { 
-    printf '\033[1;31m[err]\033[0m %s\n' "$*" >&2
+    echo "$*" >&2
     exit 1
 }
 
@@ -21,16 +21,18 @@ wait_http() {   # wait_http <url> <label> [attempts]
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUN_DIR="$ROOT_DIR/run/"
-OPENSOVD_BIN="$ROOT_DIR/opensovd-core/target/debug/opensovd-gateway"
-GATEWAY_URL="http://127.0.0.1:7690"
+DFM_BIN="$ROOT_DIR/product/components/fault-lib/target/debug/dfm_bin"
+DFM_STORAGE="$RUN_DIR/dfm-storage"
+CATALOG_DIR="$ROOT_DIR/product/config/catalog"
 
 mkdir -p "$RUN_DIR"
 
-if [ -x $GATEWAY_BIN ] ; then
-    "$OPENSOVD_BIN" >"$RUN_DIR/opensovd.log" 2>&1 &
-    wait_http "$GATEWAY_URL/" "OpenSOVD gateway"
+if [ -x $DFM_BIN ] ; then
+    rm -rf "$DFM_STORAGE"
+    mkdir -p "$DFM_STORAGE"
+    "$DFM_BIN" --catalog-dir "$CATALOG_DIR" --storage-dir "$DFM_STORAGE" >"$RUN_DIR/dfm.log" 2>&1 &
 else
-    fail "OpenSOVD binary $OPENSOVD_BIN not found, did you build it?" 
+    fail "DFM binary $DFM_BIN not found, did you build it?" 
 fi
 
-puts "OpenSOVD Gateway up and running"
+echo "DFM up and running"
