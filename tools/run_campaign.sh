@@ -40,6 +40,18 @@ SUMMARY="$OUT/summary.txt"
 mkdir -p "$OUT" "$OUT/logs"
 cd "$ROOT"
 
+# Single-flight guard: two concurrent campaign instances silently interleave
+# two component chains on the shared zenoh bus (stale sessions keep running
+# after a client dies), which corrupts every verdict with cross-timeline
+# noise. Fail closed instead of waiting so a second invocation fails
+# visibly rather than producing contaminated evidence. The lock file is
+# SHARED across runs (reports/), not per-campaign-dir.
+exec 9>"$ROOT/reports/.campaign.lock"
+if ! flock -n 9; then
+  echo "run_campaign: another campaign instance already owns the lock (reports/.campaign.lock); refusing to run" >&2
+  exit 4
+fi
+
 # Live Scenario Observer (ADR-016): the campaign serves it for every case by
 # default; set E2E_OBSERVER=0 to run without it. Read by run_case.sh.
 E2E_OBSERVER="${E2E_OBSERVER:-1}"
