@@ -103,6 +103,17 @@ def campaign_plan(config: dict[str, Any]) -> list[Experiment]:
                     experiments.append(
                         Experiment(campaign_id, scenario_id, {"variation": "standard"})
                     )
+        elif "baseline_campaign" in campaign_file:
+            spec = campaign_file["baseline_campaign"]
+            if not isinstance(spec, dict) or not spec.get("id"):
+                raise HarnessError(f"baseline campaign file {name} has no campaign id")
+            scenarios = config["scenario_groups"].get(spec.get("scenarios"))
+            if not scenarios:
+                raise HarnessError(f"campaign file {name} references unknown group {spec.get('scenarios')!r}")
+            for scenario_id in scenarios:
+                experiments.append(
+                    Experiment(spec["id"], scenario_id, {"variation": "baseline"})
+                )
         elif "campaign" in campaign_file:
             campaign = campaign_file["campaign"]
             incidents = campaign_file.get("incidents", [])
@@ -160,8 +171,15 @@ def validate(config: dict[str, Any]) -> None:
         if not isinstance(oracle, dict) or oracle.get("scenario_id") != scenario_id:
             raise HarnessError(f"scenario {scenario_id} has a mismatching Oracle")
     experiments = campaign_plan(config)
-    if len(experiments) != 22:
-        raise HarnessError(f"initial campaign matrix must contain 22 experiments, got {len(experiments)}")
+    baseline = [item for item in experiments if item.definition.get("variation") == "baseline"]
+    standard = [item for item in experiments if item.definition.get("variation") != "baseline"]
+    if len(standard) != 22:
+        raise HarnessError(f"initial campaign matrix must contain 22 standard experiments, got {len(standard)}")
+    if len(baseline) != len(config["scenario_groups"]["nominal"]):
+        raise HarnessError(
+            "campaign matrix must contain exactly one baseline experiment per nominal scenario, "
+            f"got {len(baseline)}"
+        )
 
 
 def observation(class_name: str, level: str) -> dict[str, str]:
@@ -429,6 +447,46 @@ def write_unsatisfiable(destination: Path, experiment: Experiment, incident: int
     )
 
 
+def generate_baseline_experiment(
+    experiment: Experiment,
+    config: dict[str, Any],
+    output_root: Path,
+) -> str:
+    """Emit the fault-free control bundle for a nominal scenario.
+
+    The Golden Scenario template is replayed unchanged: the ASC is copied
+    byte-identical (no mutator call, empty mutation ground truth), and the
+    scenario oracle is carried over verbatim with only the scenario id
+    upgraded to the experiment id (spec section 9, baseline experiments).
+    """
+    destination = output_root / experiment.campaign_id / experiment.scenario_id
+    if destination.exists():
+        raise HarnessError(f"refusing to overwrite existing experiment {destination}")
+    scenario_prefix = repo_path(config["scenarios"][experiment.scenario_id])
+    oracle = load_yaml(Path(f"{scenario_prefix}.oracle.yaml"))
+    oracle["scenario_id"] = experiment.experiment_id
+    destination.mkdir(parents=True)
+    shutil.copyfile(Path(f"{scenario_prefix}.asc"), destination / "case.asc")
+    dump_yaml(destination / "case.ground_truth.yaml", [])
+    dump_yaml(destination / "case.oracle.yaml", oracle)
+    dump_yaml(
+        destination / "experiment.yaml",
+        {
+            "schema_version": 1,
+            "experiment_id": experiment.experiment_id,
+            "campaign_id": experiment.campaign_id,
+            "scenario_id": experiment.scenario_id,
+            "source_window_ms": {"start": 0, "end": 19_900},
+            "files": {
+                "asc": "case.asc",
+                "ground_truth": "case.ground_truth.yaml",
+                "oracle": "case.oracle.yaml",
+            },
+        },
+    )
+    return "GENERATED"
+
+
 def generate_experiment(
     experiment: Experiment,
     config: dict[str, Any],
@@ -437,6 +495,8 @@ def generate_experiment(
     oracle: Path,
     output_root: Path,
 ) -> str:
+    if experiment.definition.get("variation") == "baseline":
+        return generate_baseline_experiment(experiment, config, output_root)
     destination = output_root / experiment.campaign_id / experiment.scenario_id
     if destination.exists():
         raise HarnessError(f"refusing to overwrite existing experiment {destination}")

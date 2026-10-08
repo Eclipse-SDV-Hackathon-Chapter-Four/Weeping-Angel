@@ -191,7 +191,8 @@ The initial configured matrix is therefore:
 ```text
 7 elementary campaigns x 3 nominal reference scenarios = 21 experiments
 1 explicit combined campaign x warm_nominal           =  1 experiment
-                                                        22 experiments total
+1 fault-free baseline run x 3 nominal scenarios       =  3 experiments
+                                                        25 experiments total
 ```
 
 This is a maximum, not a requirement to generate semantically invalid cases.
@@ -776,6 +777,36 @@ Measured nominal `temp_max` slopes of the golden templates: cold/warm
   target the hot-template incidents 2 and 3 land identically (the mutator
   accepts the first representable WARNING point ≥ target); cold/warm land
   distinct trajectories. Incident 2 keeps its 0.9 target.
+
+#### Decided addition: fault-free baseline experiments (2026-10-08)
+
+The campaign adds one fault-free baseline experiment per nominal reference
+scenario (`baseline--cold_nominal`, `baseline--warm_nominal`,
+`baseline--hot_nominal`, configured in
+`product/config/battery_campaign/baseline.yaml`). Purpose: replay the
+untouched Golden Scenario template under the full campaign stack as a
+clean-baseline control, so a trusted fault verdict is always anchored by a
+fault-free verdict of the same stack.
+
+The baseline bundle is an identity copy, produced by the harness without a
+Mutator call (no incident exists to ask it about):
+
+- `case.asc` is the scenario template ASC byte-identical — no mutation, no
+  incident slots, no re-timing;
+- `case.ground_truth.yaml` is the empty list (no incidents);
+- `case.oracle.yaml` is the scenario oracle verbatim with only the
+  `scenario_id` upgraded to the experiment id. The oracle expectation
+  follows the actual scenario bundle: `source_window_ms` 0–19_900 and
+  `transitions: []` for cold/warm; hot carries exactly the documented
+  single `THERMAL_LIMIT`/`WARNING` transition (active from `at_ms: 0`,
+  `signal: temp_max`) because that template is already nominally past the
+  thermal WARNING threshold — a baseline is "clean", not "no warnings".
+
+Expected verdict is PASS for all three baselines. An end-of-stream STALE
+artifact after the source window is verdict-neutral (collector PostHorizon
+status, annotated, not a FAIL); any transition inside the source window
+that the oracle does not expect FAILS the baseline and means the nominal
+trajectory is no longer clean.
 
 ## 10. Implemented generation interface and remaining execution work
 
