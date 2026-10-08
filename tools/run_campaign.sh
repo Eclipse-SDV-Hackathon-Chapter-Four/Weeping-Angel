@@ -50,6 +50,11 @@ collector_features=()
 [ "$E2E_OBSERVER" = 1 ] && collector_features=(--features observer)
 (cd product/components/evidence_collector && cargo build "${collector_features[@]}") \
   || { echo "run_campaign: evidence collector build failed" >&2; exit 3; }
+# The mutator and its oracle binary feed generation directly; a stale
+# cross-toolchain binary in the shared target/ (host nix vs container) would
+# silently encode pre-change designs, so build both here like the collector.
+(cd product/components/case_mutator && cargo build -q --bins) \
+  || { echo "run_campaign: case mutator build failed" >&2; exit 3; }
 
 echo "== generating experiments into $EXPERIMENTS"
 python3 product/components/battery_campaign_harness/harness.py generate \
