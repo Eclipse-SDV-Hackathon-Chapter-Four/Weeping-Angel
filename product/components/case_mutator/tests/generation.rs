@@ -361,3 +361,114 @@ fn impossible_goal_writes_structured_unsatisfiable_result() {
     assert!(result.contains("status: UNSATISFIABLE"));
     assert!(result.contains("PRIMARY_NOT_REACHED"));
 }
+
+/// Companion excitation on a flat template: the SoC-peer drift arms the
+/// Guardian stuck detector (ADR-014) inside the hold window, so a detected
+/// stuck goal is satisfiable even without nominal template excitation.
+#[test]
+fn stuck_with_soc_companion_excitation_generates_detected_case() {
+    let temp = TempDir::new().unwrap();
+    let root = repository_root();
+    // Flat template: no nominal excitation in the mutation window; SoC
+    // baseline is 80.0 pp.
+    let template = flat_template(&temp);
+    let request_path = temp.path().join("signal_stuck_companion.yaml");
+    let contents = format!(
+        "template: {}\n\
+         battery_model: {}\n\
+         run_id: stuck-companion-test\n\
+         started_at: 2026-10-07T00:00:00Z\n\
+         injection_id: signal_stuck_companion\n\
+         injected_class: signal.stuck\n\
+         mutations:\n\
+         \x20 - signal: temp_avg\n\
+         \x20   operator: stuck\n\
+         \x20   parameters:\n\
+         \x20     duration_samples: 10\n\
+         \x20 - signal: soc\n\
+         \x20   operator: drift\n\
+         \x20   parameters:\n\
+         \x20     rate_per_sample: -0.5\n\
+         \x20     duration_samples: 10\n\
+         generation_goal:\n\
+         \x20 primary:\n\
+         \x20   - class: SIGNAL_STUCK\n\
+         \x20     level: VIOLATION\n\
+         \x20 allowed: []\n\
+         \x20 forbidden: []\n\
+         \x20 allow_unspecified_codetections: true\n\
+         seed: 0\n\
+         lead_in_frames: 20\n",
+        template.display(),
+        root.join("product/config/battery_guardian/guardian_model.yaml")
+            .display(),
+    );
+    fs::write(&request_path, contents).unwrap();
+
+    let output = temp.path().join("output");
+    let RunResult::Generated {
+        ground_truth,
+        oracle,
+        ..
+    } = run(&request_path, &output).unwrap()
+    else {
+        panic!("stuck + SoC companion must be satisfiable on a flat template");
+    };
+    let truth = fs::read_to_string(ground_truth).unwrap();
+    assert!(truth.contains("signal: soc"));
+    assert!(truth.contains("operator: drift"));
+    let oracle = fs::read_to_string(oracle).unwrap();
+    assert!(oracle.contains("status: SATISFIED"));
+    assert!(oracle.contains("SIGNAL_STUCK"));
+}
+
+/// The companion must not mask goal semantics: with SIGNAL_STUCK forbidden,
+/// the stuck construction gate is skipped (negative-control semantics), but
+/// the companion excitation itself arms the detector, so the case fails the
+/// goal evaluation — UNSAT is gate-independent and honest.
+#[test]
+fn forbidden_goal_with_companion_fails_on_goal_not_on_the_stuck_gate() {
+    let temp = TempDir::new().unwrap();
+    let root = repository_root();
+    let template = flat_template(&temp);
+    let request_path = temp.path().join("signal_stuck_companion_negative.yaml");
+    let contents = format!(
+        "template: {}\n\
+         battery_model: {}\n\
+         run_id: stuck-companion-negative-test\n\
+         started_at: 2026-10-07T00:00:00Z\n\
+         injection_id: signal_stuck_companion_negative\n\
+         injected_class: signal.stuck\n\
+         mutations:\n\
+         \x20 - signal: temp_avg\n\
+         \x20   operator: stuck\n\
+         \x20   parameters:\n\
+         \x20     duration_samples: 10\n\
+         \x20 - signal: soc\n\
+         \x20   operator: drift\n\
+         \x20   parameters:\n\
+         \x20     rate_per_sample: -0.5\n\
+         \x20     duration_samples: 10\n\
+         generation_goal:\n\
+         \x20 primary: []\n\
+         \x20 allowed: []\n\
+         \x20 forbidden:\n\
+         \x20   - class: SIGNAL_STUCK\n\
+         \x20     level: VIOLATION\n\
+         \x20 allow_unspecified_codetections: true\n\
+         seed: 0\n\
+         lead_in_frames: 20\n",
+        template.display(),
+        root.join("product/config/battery_guardian/guardian_model.yaml")
+            .display(),
+    );
+    fs::write(&request_path, contents).unwrap();
+
+    let output = temp.path().join("output");
+    let RunResult::Unsatisfiable { result } = run(&request_path, &output).unwrap() else {
+        panic!("companion excitation must trigger the forbidden stuck observation");
+    };
+    let record: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(result).unwrap()).unwrap();
+    assert_eq!(record["reason"]["code"], "FORBIDDEN_CODETECTION");
+}

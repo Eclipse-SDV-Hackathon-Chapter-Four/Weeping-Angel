@@ -178,9 +178,35 @@ def standard_incidents(campaign: str, guardian: dict[str, Any]) -> list[dict[str
         durations = [stuck_n - 1, stuck_n, stuck_n + 1, math.ceil(1.5 * stuck_n), 2 * stuck_n]
         for index, duration in enumerate(durations):
             detected = index > 0
+            mutations = [
+                {"signal": "temp_avg", "operator": "stuck", "parameters": {"duration_samples": duration}}
+            ]
+            if detected:
+                # Companion excitation arms the Guardian stuck detector
+                # (ADR-014). The measured per-signal static amplitudes inside
+                # the hold windows of the golden templates stay at or below
+                # 0.5 °C / 1.0 pp, so a stuck-only hold never reaches
+                # `stuck.temperature_excitation_c` = 1.0. The companion drifts
+                # SoC downward at 0.5 pp per sample = 5.0 pp/second, exactly
+                # the SoC-rate limit: peak-to-peak excitation is
+                # 0.5 * duration pp (>= 1.0 pp for every detected incident)
+                # and the cumulative SoC stays inside its DBC range
+                # (>= 45 pp nominal baseline). The 0.25 pp/sample candidate
+                # is NOT DBC-representable (quantum 0.5 pp) and was rejected
+                # by forward-verified generation; a temperature companion of
+                # the same rate would sit exactly on the thermal rate limits
+                # and couple into ordering/hotspot, so SoC was chosen.
+                # Steps are negative to keep headroom against 100 pp.
+                mutations.append(
+                    {
+                        "signal": "soc",
+                        "operator": "drift",
+                        "parameters": {"rate_per_sample": -0.5, "duration_samples": duration},
+                    }
+                )
             incidents.append(
                 {
-                    "mutations": [{"signal": "temp_avg", "operator": "stuck", "parameters": {"duration_samples": duration}}],
+                    "mutations": mutations,
                     "goal": goal(
                         [observation("SIGNAL_STUCK", "VIOLATION")] if detected else [],
                         [] if detected else [observation("SIGNAL_STUCK", "VIOLATION")],

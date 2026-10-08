@@ -48,6 +48,25 @@ class HarnessTest(unittest.TestCase):
             "STREAM_STALE", incidents[2]["goal"]["primary"][0]["class"]
         )
 
+    def test_stuck_detected_incidents_carry_exactly_one_companion(self):
+        incidents = HARNESS.standard_incidents("signal.stuck", self.guardian)
+        self.assertEqual([], incidents[0]["mutations"][1:])
+        for incident in incidents[1:]:
+            mutations = incident["mutations"]
+            self.assertEqual(2, len(mutations))
+            self.assertEqual(
+                {"temp_avg", "soc"}, {mutation["signal"] for mutation in mutations}
+            )
+            self.assertEqual(
+                "stuck", mutations[0]["operator"], "stuck mutation is first"
+            )
+            self.assertEqual("drift", mutations[1]["operator"])
+            self.assertEqual(
+                mutations[0]["parameters"]["duration_samples"],
+                mutations[1]["parameters"]["duration_samples"],
+                "companion shares the stuck hold window",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

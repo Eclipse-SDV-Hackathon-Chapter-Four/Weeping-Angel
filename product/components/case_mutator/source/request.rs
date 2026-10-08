@@ -289,14 +289,16 @@ fn validate_injection(injected_class: &str, injection: &ResolvedInjection) -> Re
         "signal.combination" => None,
         _ => bail!("unsupported injected_class {injected_class:?}"),
     };
-    let expected_count = if injected_class == "signal.combination" {
-        2
-    } else {
-        1
-    };
-    if injection.mutations.len() < expected_count
-        || (expected_count == 1 && injection.mutations.len() != 1)
-    {
+    let mutation_count = injection.mutations.len();
+    if injected_class == "signal.combination" {
+        if mutation_count < 2 {
+            bail!("signal.combination has invalid mutation count");
+        }
+    } else if injected_class == "signal.stuck" {
+        if mutation_count == 0 || mutation_count > 2 {
+            bail!("signal.stuck has invalid mutation count");
+        }
+    } else if mutation_count != 1 {
         bail!("{injected_class} has invalid mutation count");
     }
     let mut signals = HashSet::new();
@@ -307,21 +309,38 @@ fn validate_injection(injected_class: &str, injection: &ResolvedInjection) -> Re
         if !signals.insert(&mutation.signal) {
             bail!("combination mutations must target distinct signals");
         }
-        if let Some(expected) = expected_operator {
-            if mutation.operator != expected {
-                bail!("{injected_class} requires operator {expected:?}");
-            }
-        }
-        if mutation.operator == "stuck" && mutation.signal == "soc" {
-            bail!("SoC is not a valid stuck target");
-        }
         if !matches!(
             mutation.operator.as_str(),
             "stuck" | "spike" | "drift" | "out_of_range"
         ) {
             bail!("unsupported mutation operator {:?}", mutation.operator);
         }
+        if mutation.operator == "stuck" && mutation.signal == "soc" {
+            bail!("SoC is not a valid stuck target");
+        }
+        if injected_class != "signal.combination"
+            && injected_class != "signal.stuck"
+            && Some(mutation.operator.as_str()) != expected_operator
+        {
+            bail!("{injected_class} requires operator {:?}", expected_operator);
+        }
         validate_parameters(mutation)?;
+    }
+    if injected_class == "signal.stuck" {
+        // Companion excitation arms the Guardian stuck detector (ADR-014):
+        // a stuck hold alone stays under the peer-excitation thresholds, so
+        // the class accepts one stuck mutation plus exactly one companion
+        // mutation on a peer signal (spike/drift/out_of_range) that must
+        // raise that peer above `guardian.stuck.temperature_excitation_c` /
+        // `soc_excitation_pp` within the hold window.
+        let stuck_count = injection
+            .mutations
+            .iter()
+            .filter(|mutation| mutation.operator == "stuck")
+            .count();
+        if stuck_count != 1 {
+            bail!("signal.stuck requires exactly one stuck mutation");
+        }
     }
     Ok(())
 }
@@ -373,22 +392,127 @@ fn validate_parameters(mutation: &Mutation) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn stuck(signal: &str, duration: usize) -> Mutation {
+        Mutation {
+            signal: signal.into(),
+            operator: "stuck".into(),
+            parameters: MutationParameters {
+                duration_samples: duration,
+                ..MutationParameters::default()
+            },
+        }
+    }
+
+    fn drift(signal: &str, rate: f32, duration: usize) -> Mutation {
+        Mutation {
+            signal: signal.into(),
+            operator: "drift".into(),
+            parameters: MutationParameters {
+                duration_samples: duration,
+                rate_per_sample: Some(rate),
+                ..MutationParameters::default()
+            },
+        }
+    }
+
+    fn validated(class: &str, mutations: Vec<Mutation>) -> std::result::Result<(), String> {
+        validate_injection(
+            class,
+            &ResolvedInjection {
+                mutations,
+                action: None,
+            },
+        )
+        .map_err(|error| error.to_string())
+    }
+
     #[test]
     fn soc_is_rejected_as_stuck_target() {
         let injection = ResolvedInjection {
-            mutations: vec![Mutation {
-                signal: "soc".into(),
-                operator: "stuck".into(),
-                parameters: MutationParameters {
-                    duration_samples: 10,
-                    ..MutationParameters::default()
-                },
-            }],
+            mutations: vec![stuck("soc", 10)],
             action: None,
         };
         assert!(validate_injection("signal.stuck", &injection)
             .unwrap_err()
             .to_string()
             .contains("not a valid stuck target"));
+    }
+
+    #[test]
+    fn stuck_accepts_exactly_one_companion_on_a_peer_signal() {
+        // Companion excitation arms the Guardian stuck detector (ADR-014).
+        assert!(validated(
+            "signal.stuck",
+            vec![stuck("temp_avg", 10), drift("soc", -0.5, 10)]
+        )
+        .is_ok());
+        assert!(validated(
+            "signal.stuck",
+            vec![drift("soc", -0.5, 10), stuck("temp_avg", 10)]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn stuck_rejects_a_second_companion() {
+        let error = validated(
+            "signal.stuck",
+            vec![
+                stuck("temp_avg", 10),
+                drift("soc", -0.5, 10),
+                drift("temp_min", 0.5, 10),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.contains("signal.stuck has invalid mutation count"));
+    }
+
+    #[test]
+    fn stuck_rejects_a_second_stuck_mutation() {
+        let error = validated(
+            "signal.stuck",
+            vec![stuck("temp_avg", 10), stuck("temp_min", 10)],
+        )
+        .unwrap_err();
+        assert!(error.contains("signal.stuck requires exactly one stuck mutation"));
+    }
+
+    #[test]
+    fn stuck_still_requires_a_stuck_mutation() {
+        let error = validated("signal.stuck", vec![drift("soc", -0.5, 10)]).unwrap_err();
+        assert!(error.contains("signal.stuck requires exactly one stuck mutation"));
+    }
+
+    #[test]
+    fn stuck_companion_must_target_a_distinct_signal() {
+        let error = validated(
+            "signal.stuck",
+            vec![stuck("temp_avg", 10), drift("temp_avg", 0.5, 10)],
+        )
+        .unwrap_err();
+        assert!(error.contains("must target distinct signals"));
+    }
+
+    #[test]
+    fn other_signal_classes_reject_companions() {
+        let error = validated(
+            "signal.drift",
+            vec![drift("temp_max", 0.5, 20), drift("soc", -0.5, 20)],
+        )
+        .unwrap_err();
+        assert!(error.contains("signal.drift has invalid mutation count"));
+        let error = validated("signal.spike", vec![stuck("temp_avg", 10)]).unwrap_err();
+        assert!(error.contains("signal.spike requires operator"));
+    }
+
+    #[test]
+    fn combination_keeps_lower_bound_of_two_mutations() {
+        assert!(validated(
+            "signal.combination",
+            vec![stuck("temp_avg", 10), drift("soc", -0.5, 10)]
+        )
+        .is_ok());
+        let error = validated("signal.combination", vec![stuck("temp_avg", 10)]).unwrap_err();
+        assert!(error.contains("signal.combination has invalid mutation count"));
     }
 }

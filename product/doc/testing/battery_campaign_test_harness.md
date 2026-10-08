@@ -269,7 +269,7 @@ them. A quantum means the smallest representable change of the target signal.
 
 | Campaign | Five incident goals |
 |---|---|
-| `signal.stuck` | `N-1` samples (control), `N` samples (boundary), `N+1` samples, `ceil(1.5N)` samples, `2N` samples; target flatness and independent excitation remain mandatory |
+| `signal.stuck` | `N-1` samples (unexcited control, no companion), `N` samples (boundary), `N+1` samples, `ceil(1.5N)` samples, `2N` samples; each detected incident pairs the stuck hold with exactly one companion excitation mutation (see below) |
 | `signal.spike` | temperature-rate utilization just below warning, 0.9, 1.0, one quantum above 1.0, and a strong violation; return edge included |
 | `signal.drift` | Hotspot utilization just below warning, 0.9, 1.0, one quantum above 1.0, and a strong violation; drift pace stays below Rate Warning where satisfiable |
 | `signal.out_of_range` | legal lower boundary, one quantum below it, legal upper boundary, one quantum above it, and a strong high violation |
@@ -282,6 +282,37 @@ timeout, 400 ms is a non-triggering control, 500 ms exercises the strict
 boundary, and 700 ms is the first robust stale case including one evaluation
 period of margin. The last three transport/source cases are binary violations
 of increasing duration, not invented warning severities.
+
+#### Decided change: companion excitation for stuck incidents (ADR-014)
+
+Rationale, verified forward by the mutator (no Guardian threshold was
+changed):
+
+- The Guardian arms `SIGNAL_STUCK` only when an independently excited peer
+  exists inside the hold window (`guardian.stuck.temperature_excitation_c`
+  / `guardian.stuck.soc_excitation_pp`, unchanged). The measured static
+  per-signal peak-to-peak amplitudes inside the hold windows of the golden
+  scenario templates are at most 0.5 °C on the temperature signals and at
+  most 1.0 pp on SoC, so a stuck-only hold never crosses those arming
+  thresholds and generation was `UNSATISFIABLE` for every detected incident.
+- Companion choice: a SoC drift on `temp_avg` peer `soc` with
+  `rate_per_sample` of −0.5 pp per sample (= exactly the limit of
+  `guardian.soc.max_rate_pp_per_s`) for the same duration as the stuck hold.
+  Excitation amplitude is `0.5 · duration` pp (≥ 1.0 pp for every detected
+  incident) and the cumulative SoC stays inside its DBC range (nominal
+  baselines ≥ 45 pp, negative steps reserve headroom against 100 pp).
+- Alternatives verified forward and rejected: 0.25 pp/sample (SoC) and
+  0.25 °C/sample (`temp_max`) are not DBC-representable (temperature/SoC
+  quantum) and are rejected by the mutator with `ENCODING_LIMIT`. A
+  representable temperature companion (0.5 °C/sample) sits exactly on the
+  thermal heating-rate limits (`guardian.temperature.dynamics.
+  heating_rate_c_per_s.{cold,hot}`) and co-drives hotspot ordering; the SoC
+  companion keeps excitation decoupled from the thermal detector family.
+  The SoC-rate co-detection this companion produces is permitted by the
+  incident goal (no `forbidden` set, unspecified co-detections allowed).
+- The `N-1` control incident deliberately remains companion-free: it must
+  stay unexcited so its goal (forbidden `SIGNAL_STUCK`) is satisfied by the
+  wanted negative-control outcome.
 
 The drift campaign has one stable primary purpose: slowly create
 `PHYSICAL_TEMP_HOTSPOT` through `temp_max`. Spread and Rate observations are

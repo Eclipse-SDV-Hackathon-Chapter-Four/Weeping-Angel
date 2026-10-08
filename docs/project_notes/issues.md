@@ -9,11 +9,17 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
-### 2026-10-08 - Mutator: UNSAT diagnostics + goal-aware stuck excitation gate
+### 2026-10-08 - Mutator: UNSAT diagnostics + goal-aware stuck gate + companion excitation
 
-- **Status**: In Progress
-- **Description**: Two systematic generation fixes in `case_mutator`. (1) Candidate-construction failures (e.g. `apply_mutations`/`ensure_stuck_excitation` bails) are now collected and summarized into the UNSAT record's `reason.detail` instead of being silently swallowed — the generic "no DBC-representable candidate trajectory" text remains only as fallback. (2) The stuck excitation gate is goal-aware: it skips only when `SIGNAL_STUCK` is in the goal's `forbidden` list (ADR-014 negative-control semantics — an unexcited hold is the intended undetectable incident); must-detect and neutral goals keep enforcement (fail-closed). `signal.stuck` incident 1 (hold n−1) now GENERATES on all three nominal scenarios.
-- **Notes**: Remaining stuck UNSATs are incidents 2–5 (must-detect): no nominal template carries peer excitation ≥ 1.0 °C / 1.0 pp within the hold window (measured max amplitudes 0.5 °C / 0.5 pp), so the Guardian forward-verified gate legitimately rejects them. Options for the harness side (each a spec-level decision per §9): companion excitation mutation in the stuck incidents (validator currently allows only one mutation per stuck injection), lowered template thresholds, or respec of the detected-incident goals. Harness smoke base: 22 experiments, UNSAT at incident 1 gone (stuck), spike/drift design-level UNSATs unchanged.
+- **Status**: Resolved
+- **Description**: Three systematic generation fixes in `case_mutator` + harness. (1) Candidate-construction failures are collected into the UNSAT record's `reason.detail` (grouped duplicates, ~400-char cap) instead of the generic encoding-limit text. (2) The stuck excitation gate is goal-aware: skip only when `SIGNAL_STUCK` is forbidden (ADR-014 negative-control semantics). (3) `validate_injection` allows stuck + exactly one companion mutation on a peer signal; harness incidents 2–5 carry a SoC companion drift (`rate_per_sample: -0.5` = 5.0 pp/s, the SoC-rate limit; steps negative for headroom) that forward-verified-arms the Guardian stuck detector. Detector thresholds (`temperature_excitation_c` 1.0, `soc_excitation_pp`) unchanged; `battery_guardian_model.md` untouched.
+- **Notes**: Companion design was forward-verified: the 0.25 pp/sample SoC candidate and a 0.25 °C/sample temperature companion are NOT DBC-representable / sit exactly on thermal-rate limits coupling into ordering/hotspot — SoC was chosen; the mutator rejects co-detections when forbidden (verified: forbidden-goal + companion → FORBIDDEN_CODETECTION, expected goal semantics). Standard matrix after the fixes: **17 GENERATED / 5 UNSATISFIABLE** — stuck 3/3 (all five incidents), remaining UNSATs are design-level spike (3) and drift warm/hot (2), tracked in the following entry.
+
+### 2026-10-08 - Design-level UNSATs: spike negative controls + drift exact-threshold touches
+
+- **Status**: Open
+- **Description**: 5 of 22 standard-matrix experiments remain UNSATISFIABLE for design reasons the mutator cannot encode: `signal.spike` (all 3 scenarios) fails at incident 1 with FORBIDDEN_CODETECTION — the smallest representable spike (1 quantum = 0.5 °C at 100 ms) yields a 5 °C/s effective rate that co-detects `PHYSICAL_TEMP_RATE` in every nominal template; `signal.drift` warm/hot fail at incident 3 (exact 1.0-utilization `PHYSICAL_TEMP_HOTSPOT/WARNING` touch) — the 0.5 °C quantum cannot land exactly on the threshold (cold passes).
+- **Notes**: Each fix is a spec-level decision per harness spec §9 (no invented trajectories): spike negative control could target a flat template segment (hot) or allow the rate co-detection in the goal; drift incident 3 could respec the utilization target (e.g. 0.9) or accept the nearest quantum. Do not touch `guardian_model.yaml` — detection thresholds stay.
 
 ### 2026-10-07 - Bake the Python environment into the devcontainer image
 - **Status**: Resolved

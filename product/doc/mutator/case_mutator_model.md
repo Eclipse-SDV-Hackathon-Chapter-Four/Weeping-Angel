@@ -151,6 +151,10 @@ temp_max
 SoC may be used as independent excitation for temperature-stuck generation but
 is not itself a stuck target.
 
+`signal.stuck` accepts one stuck mutation plus at most one companion mutation
+on a peer signal (spike/drift/out_of_range) that arms the stuck detector; more
+than one companion is rejected.
+
 ### 4.2 Combination faults
 
 `signal.combination` contains at least two distinct signal mutations:
