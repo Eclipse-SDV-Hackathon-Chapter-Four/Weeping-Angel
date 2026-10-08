@@ -1,3 +1,13 @@
+// Copyright (c) 2026 Matthias Knöfel
+//
+// This program and the accompanying materials are made available under
+// the terms of the Eclipse Public License 2.0 which accompanies this
+// distribution, and is available at https://www.eclipse.org/legal/epl-2.0/
+//
+// AI Disclosure: This file was mostly AI-generated.
+//
+// SPDX-License-Identifier: EPL-2.0 and CC0-1.0
+// Assisted-by: Claude Opus 5.5
 //! Serializable SOVD views of DFM faults (`SovdFault` itself has no serde).
 
 use std::collections::BTreeMap;

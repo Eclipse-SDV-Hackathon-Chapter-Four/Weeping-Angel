@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Sebastian Russer
+# Copyright (c) 2026 Matthias Knöfel
+# Copyright (c) 2026 Alwin Berger
+#
+# This program and the accompanying materials are made available under
+# the terms of the Eclipse Public License 2.0 which accompanies this
+# distribution, and is available at https://www.eclipse.org/legal/epl-2.0/
+#
+# AI Disclosure: This file was mostly AI-generated.
+#
+# SPDX-License-Identifier: EPL-2.0 and CC0-1.0
+# Assisted-by: Claude Opus 5.5, DeepSeek v4.1 Flash
 # Start the KUKSA Data Broker in the background with the official VSS catalogue
 # (KUKSA_VSS_FILE, set by the dev container image) plus the product overlay
 # (product/config/vss_overlay.json: custom paths such as SourceTimestamp).

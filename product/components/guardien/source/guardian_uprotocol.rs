@@ -1,3 +1,14 @@
+// Copyright (c) 2026 Matthias Knöfel
+// Copyright (c) 2026 Alwin Berger
+//
+// This program and the accompanying materials are made available under
+// the terms of the Eclipse Public License 2.0 which accompanies this
+// distribution, and is available at https://www.eclipse.org/legal/epl-2.0/
+//
+// AI Disclosure: This file was mostly AI-generated.
+//
+// SPDX-License-Identifier: EPL-2.0 and CC0-1.0
+// Assisted-by: Claude Opus 5.5, GLM-5.3-flash
 //! Guardian → uProtocol fault-event publishing (ADR-007).
 //!
 //! Mirrors every fault-level change that is reported to the DFM as a JSON

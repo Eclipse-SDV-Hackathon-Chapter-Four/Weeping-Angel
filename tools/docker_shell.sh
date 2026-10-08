@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Alwin Berger
+#
+# This program and the accompanying materials are made available under
+# the terms of the Eclipse Public License 2.0 which accompanies this
+# distribution, and is available at https://www.eclipse.org/legal/epl-2.0/
+#
+# AI Disclosure: This file was mostly AI-generated.
+#
+# SPDX-License-Identifier: EPL-2.0 and CC0-1.0
+# Assisted-by: DeepSeek v4.1 Flash
 # Start the hackathon dev container for this repo and open a shell, or run the
 # given command inside it. If a container with the same name already exists, it
 # is reused (started if stopped) instead of starting a second one.

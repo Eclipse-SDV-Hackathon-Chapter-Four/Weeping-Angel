@@ -9,6 +9,12 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 - **Description**: 1–2 line summary
 - **Notes**: Context worth remembering
 
+### 2026-10-08 - Git-archaeology license/AI-disclosure headers for all source files
+
+- **Status**: Resolved
+- **Description**: Added a uniform SPDX + AI-disclosure header block (schema mirrored from `flake.nix`: `Copyright (c) 2026 <human authors>`, EPL-2.0 boilerplate, `AI Disclosure: This file was mostly AI-generated.`, `SPDX-License-Identifier: EPL-2.0 and CC0-1.0`, `Assisted-by: <normalized models>`) to all tracked Rust, Python, Shell, Nix and Makefile files via the new generator `tools/license_headers.py` (idempotent, `--dry-run`/`--apply`). Human authors and AI models are sampled per file from `git log --follow` author names and `Assisted-by`/`Co-Authored-By`/`Authored-by` trailers; model spellings are normalized.
+- **Notes**: 65 files updated, 4 skipped (`flake.nix` kept as schema reference; the three `product/components/vss_bridge/*` files are pre-work-derived). No model is guessed: files without an identifiable trailer get no `Assisted-by` line. Normalized models: DeepSeek v4.1 Flash, GLM-5.3-flash, Claude Opus 5.5, Claude Sonnet 5.5, Xiaomi MiMo v2.6 Pro. Human contributors: Alwin Berger, Peter Ulbrich, Sebastian Russer, Matthias Knöfel, Michael Warmuth-Uhl. `tools/license_headers.py` itself is untracked and will receive its header once committed (it only processes tracked files).
+
 ### 2026-10-08 - Mutator: UNSAT diagnostics + goal-aware stuck gate + companion excitation
 
 - **Status**: Resolved

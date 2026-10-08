@@ -5,10 +5,10 @@
 # the terms of the Eclipse Public License 2.0 which accompanies this
 # distribution, and is available at https://www.eclipse.org/legal/epl-2.0/
 #
-# AI Disclosure: This file was fully AI-generated.
+# AI Disclosure: This file was mostly AI-generated.
 #
 # SPDX-License-Identifier: EPL-2.0 and CC0-1.0
-# Assisted-by: deepseek-v4.1-flash
+# Assisted-by: DeepSeek v4.1 Flash
 """Plot the battery signals from an example CAN .asc file.
 
 Frame 0x100 payload (8 bytes, little-endian):
