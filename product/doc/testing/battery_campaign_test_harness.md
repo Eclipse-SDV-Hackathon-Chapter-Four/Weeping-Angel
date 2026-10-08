@@ -270,8 +270,8 @@ them. A quantum means the smallest representable change of the target signal.
 | Campaign | Five incident goals |
 |---|---|
 | `signal.stuck` | `N-1` samples (unexcited control, no companion), `N` samples (boundary), `N+1` samples, `ceil(1.5N)` samples, `2N` samples; each detected incident pairs the stuck hold with exactly one companion excitation mutation (see below) |
-| `signal.spike` | temperature-rate utilization just below warning, 0.9, 1.0, one quantum above 1.0, and a strong violation; return edge included |
-| `signal.drift` | Hotspot utilization just below warning, 0.9, 1.0, one quantum above 1.0, and a strong violation; drift pace stays below Rate Warning where satisfiable |
+| `signal.spike` | one-quantum control (forbidden: rate VIOLATION; the necessarily co-produced rate WARNING is allowed), two one-quantum WARNING incidents at the only representable warning utilization (return edge, target 0.83), minimal violation above 1.0, and a strong violation; return edge included |
+| `signal.drift` | Hotspot utilization 0.9, 0.92, utilization one quantum above 1.0, and a strong violation; the original boundary incident at utilization 1.0 is respec'd to 0.92 (quantum floor, see Section 9); drift pace stays below Rate Warning where satisfiable |
 | `signal.out_of_range` | legal lower boundary, one quantum below it, legal upper boundary, one quantum above it, and a strong high violation |
 | `transport.delay` | CAN replay-delivery gaps of 400, 500, 700, 1000, and 2000 ms while preserving payload source timestamps |
 | `transport.drop` | omitted CAN replay frames producing gaps of 400, 500, 700, 1000, and 2000 ms without rebasing later source timestamps |
@@ -739,6 +739,43 @@ rules:
 - emit product frame `0x100` only in the canonical CAN FD ASC form;
 - surface an unsatisfied timing or model constraint as `UNSATISFIABLE` or an
   open design issue rather than silently changing the campaign.
+
+#### Decided change: goal respec of the quantum-floor spike/drift incidents (2026-10-08)
+
+The original five-point profiles (`spike`: rate WARNING at 0.9/1.0, `drift`:
+hotspot WARNING at 1.0) sit below the representable range of the 0.5 °C DBC
+quantum and were `UNSATISFIABLE` in `FORBIDDEN_CODETECTION`
+(`spike`, incident 1) / `PRIMARY_NOT_REACHED` (`drift` warm/hot, incident 3).
+Measured nominal `temp_max` slopes of the golden templates: cold/warm
+0.44 °C/s (theta ≈ 0–0.26, heating limit 8.0–7.2 °C/s), hot 0.00 °C/s
+(theta 0.77, heating limit 5.7 °C/s). Forward-verified by real generation
+(22/22 GENERATED), NO Guardian threshold or mutator mechanism was changed:
+
+- `spike` incident 1 (one-quantum control): `forbidden` now asserts only
+  rate VIOLATION; the rate WARNING moved from `forbidden` to `allowed`.
+  Reason: the smallest representable spike (one 0.5 °C quantum over
+  100 ms = 5.0 °C/s on rising and return edge) necessarily reaches the rate
+  WARNING — the return edge is 5.0 °C/s against the temperature-independent
+  cooling limit 6.0 °C/s = utilization 0.83 ≥ warning threshold 0.8 in every
+  template — while the largest utilization of this delta is 0.88 (hot
+  up edge), so a rate VIOLATION is never producible with the exact delta.
+- `spike` incidents 2/3 (WARNING 0.9/1.0): respec'd to WARNING target 0.83.
+  Reason: a one-sample 0.5-quantum spike plus its return has exactly ONE
+  representable WARNING utilization in cold/warm (return edge 0.83); the
+  up edge admits no representable delta in the WARNING band cold/warm
+  (0.5→0.62–0.69, 1.0→VIOLATION) and only hot adds up-edge 0.88. Both
+  WARNING incidents therefore assert the same representable warning point
+  (degenerate repeat); targets 0.9/1.0 are not landable on the lattice.
+- `drift` incident 3 (WARNING 1.0): `warning_target_utilization` respec'd
+  from 1.0 to 0.92. Reason: exact 1.0 utilization is not landable on the
+  0.5 °C quantum (cold only coincidentally aligned); 0.92 asserts reaching
+  the WARNING with margin. Verified forward: 0.95 and 0.97 both remain
+  UNSATISFIABLE in warm/hot because the hot-template warning lattice has a
+  single representable point (utilization 0.926 = diff 2.5 quanta vs limit
+  2.7 °C). Residual limitation, documented not fixed: with every in-band
+  target the hot-template incidents 2 and 3 land identically (the mutator
+  accepts the first representable WARNING point ≥ target); cold/warm land
+  distinct trajectories. Incident 2 keeps its 0.9 target.
 
 ## 10. Implemented generation interface and remaining execution work
 

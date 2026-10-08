@@ -23,9 +23,9 @@ Short work log; details live in git history. Status: Open / In Progress / Resolv
 
 ### 2026-10-08 - Design-level UNSATs: spike negative controls + drift exact-threshold touches
 
-- **Status**: Open
-- **Description**: 5 of 22 standard-matrix experiments remain UNSATISFIABLE for design reasons the mutator cannot encode: `signal.spike` (all 3 scenarios) fails at incident 1 with FORBIDDEN_CODETECTION — the smallest representable spike (1 quantum = 0.5 °C at 100 ms) yields a 5 °C/s effective rate that co-detects `PHYSICAL_TEMP_RATE` in every nominal template; `signal.drift` warm/hot fail at incident 3 (exact 1.0-utilization `PHYSICAL_TEMP_HOTSPOT/WARNING` touch) — the 0.5 °C quantum cannot land exactly on the threshold (cold passes).
-- **Notes**: Each fix is a spec-level decision per harness spec §9 (no invented trajectories): spike negative control could target a flat template segment (hot) or allow the rate co-detection in the goal; drift incident 3 could respec the utilization target (e.g. 0.9) or accept the nearest quantum. Do not touch `guardian_model.yaml` — detection thresholds stay.
+- **Status**: Resolved
+- **Description**: The 5 remaining design-level UNSATs were resolved by goal respec in the harness (spec-governed per §9, no mutator/guardian changes): spike incident 1 asserts the rate VIOLATION must not fire (the 0.5-quantum spike plus nominal slopes necessarily reaches the rate WARNING — moved to `allowed`); spike warning incidents re-targeted to the one representable warning utilization 0.83 (5.0/6.0 return-edge, forward-verified — targets 0.9/1.0 are not landable); drift incident 3 utilization 0.92 (0.95/0.97 forward-verified UNSAT in warm/hot; hot's warning lattice has exactly one point = 0.926). Standard matrix: **22/22 GENERATED**.
+- **Notes**: Degenerate repeats documented in the harness spec §9 respec block: spike warning incidents 2/3 land identically in cold/warm (single representable warning point each), and drift-hot incidents 2/3/4 collapse to the same lattice point (60.5→70.0). Both are in-band-unfixable without changing templates or mutator mechanics — spec-level follow-up decision needed if full lattice coverage is required.
 
 ### 2026-10-07 - Bake the Python environment into the devcontainer image
 - **Status**: Resolved

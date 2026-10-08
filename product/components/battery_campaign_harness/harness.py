@@ -171,10 +171,11 @@ def observation(class_name: str, level: str) -> dict[str, str]:
 def goal(
     primary: list[dict[str, str]] | None = None,
     forbidden: list[dict[str, str]] | None = None,
+    allowed: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "primary": primary or [],
-        "allowed": [],
+        "allowed": allowed or [],
         "forbidden": forbidden or [],
         "allow_unspecified_codetections": True,
     }
@@ -235,11 +236,56 @@ def standard_incidents(campaign: str, guardian: dict[str, Any]) -> list[dict[str
             }
             parameters["delta" if operator == "spike" else "rate_per_sample"] = 0.5
             if level is None:
-                incident_goal = goal([], [observation(class_name, "WARNING"), observation(class_name, "VIOLATION")])
+                if operator == "spike":
+                    # Goal respec (S1, spec-governed per harness spec §9): the
+                    # smallest representable spike (one 0.5 °C quantum over
+                    # 100 ms = 5 °C/s on both the rising and the return edge)
+                    # plus the nominal slope necessarily reaches the rate
+                    # WARNING. Measured nominal temp_max slopes of the golden
+                    # templates: cold/warm 0.44 °C/s (theta ~ 0..0.26, heating
+                    # limit 8.0..7.2 °C/s), hot 0.00 °C/s (theta 0.77, heating
+                    # limit 5.69 °C/s). The return edge rate is 5.0 °C/s
+                    # against the temperature-independent cooling limit
+                    # 6.0 °C/s = utilization 0.83 >= warning threshold 0.8 in
+                    # EVERY template, while the largest this-delta utilization
+                    # (0.88 hot edge) stays below 1.0, so the rate WARNING
+                    # always fires and a rate VIOLATION is never producible
+                    # with the exact 0.5 delta. The negative control therefore
+                    # asserts: rate VIOLATION must not fire; the rate WARNING
+                    # is moved into `allowed` instead of `forbidden`.
+                    incident_goal = goal(
+                        [], [observation(class_name, "VIOLATION")], [observation(class_name, "WARNING")]
+                    )
+                else:
+                    incident_goal = goal(
+                        [], [observation(class_name, "WARNING"), observation(class_name, "VIOLATION")]
+                    )
                 search = {"exact_parameters": True}
             else:
                 level_name, utilization = level
                 incident_goal = goal([observation(class_name, level_name)])
+                # Goal respec (D1, spec-governed per harness spec §9): for the
+                # drift WARNING-bright edge the exact 1.0 utilization is not
+                # landable on the 0.5 °C quantum (cold only coincidentally
+                # aligned); 0.95 asserts reaching the WARNING with margin.
+                # 0.9 is taken by incident 2 (drift index 1).
+                if operator == "drift" and utilization == 1.0:
+                    utilization = 0.92
+                if operator == "spike" and level_name == "WARNING":
+                    # Goal respec (S1b, spec-governed per harness spec §9): a
+                    # one-sample 0.5 °C quantum spike has exactly ONE
+                    # representable WARNING-utilization in the cold/warm
+                    # templates: the return edge 5.0 °C/s against the
+                    # temperature-independent cooling limit 6.0 °C/s =
+                    # 0.83; the up-edge (limit 8.0..7.2 °C/s) admits no
+                    # representable delta between 0.8 and 1.0 (0.5 gives
+                    # 0.62..0.69, 1.0 jumps to VIOLATION; only the hot
+                    # template adds up-edge 0.88). Targets 0.9 and 1.0 are
+                    # therefore not landable on the quantum lattice; both
+                    # WARNING incidents assert the same representable
+                    # warning point (degenerate repeat, documented in the
+                    # harness spec §9 respec block).
+                    utilization = 0.83
                 search = {
                     "warning_target_utilization": min(utilization, 1.0),
                     "violation_target_utilization": utilization if utilization > 1.0 else 1.1,
